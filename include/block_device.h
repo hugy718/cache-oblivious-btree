@@ -40,7 +40,6 @@ class BlockDevice {
   // std::set<uint64_t> in_memory_;
   const uint64_t buffer_size_;
   std::unique_ptr<char> buffer_;
-
 };
 
 }  // namespace cobtree

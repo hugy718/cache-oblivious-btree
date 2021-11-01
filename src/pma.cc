@@ -7,12 +7,12 @@ PMASegment PMA::Get(uint64_t segment_id) const {
   return PMASegment();
 }
 
-uint64_t PMA::Add(const char* item, uint64_t segment_id, UpdateContext* ctx) {
+uint64_t PMA::Add(const char* item, uint64_t segment_id, PMAUpdateContext* ctx) {
   /*not implemented*/
   return 0;
 }
 
-uint64_t PMA::Add(const char* item, uint64_t segment_id, uint64_t pos, UpdateContext* ctx) {
+uint64_t PMA::Add(const char* item, uint64_t segment_id, uint64_t pos, PMAUpdateContext* ctx) {
   /*not implemented*/
   // if () {
   //   Rebalance(segment_id, ctx);
@@ -22,11 +22,11 @@ uint64_t PMA::Add(const char* item, uint64_t segment_id, uint64_t pos, UpdateCon
   return 0;
 }
 
-void PMA::Rebalance(uint64_t segment_id, UpdateContext* ctx) { 
+void PMA::Rebalance(uint64_t segment_id, PMAUpdateContext* ctx) { 
   /*not implemented*/
 }
 
-void PMA::Reallocate(UpdateContext* ctx) {
+void PMA::Reallocate(PMAUpdateContext* ctx) {
   /*not implemented*/
 }
 

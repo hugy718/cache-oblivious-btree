@@ -27,7 +27,7 @@ class CacheBlock {
 
  private:
   uint64_t len_;
-  std::unique_ptr<char[]> content_;
+  char* content_;
 };
 
 class Cache {
