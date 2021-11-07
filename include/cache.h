@@ -42,7 +42,9 @@ class Cache {
     return contents_.find(id) != contents_.end(); 
   }
   
-  char* Get(const std::string& id) { return contents_[id].data(); }
+  char* Get(const std::string& id) { 
+    return (Exist(id)) ? contents_[id].data() : nullptr;
+  }
 
   // inform cache the block size to count number of transfer
   // the content added to cache can be multiple block size

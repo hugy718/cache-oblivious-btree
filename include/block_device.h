@@ -24,7 +24,7 @@ class BlockDevice {
     buffer_(new char[buffer_size_]) {}
   
   // return the number of bytes read
-  uint64_t Read(uint64_t offset, uint64_t len, char* ret, uint64_t* cost);
+  uint64_t Read(uint64_t offset, uint64_t len, char* ret);
   
   void Write(const char* data, uint64_t offset, uint64_t len);
 
