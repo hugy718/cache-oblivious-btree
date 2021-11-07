@@ -5,7 +5,7 @@ namespace cobtree {
 
 // return the number of bytes read
 uint64_t BlockDevice::Read(uint64_t offset, uint64_t len, 
-  char* ret, uint64_t* cost) {
+  char* ret) {
   ret = buffer_.get() + offset;
   return (offset + len > buffer_size_) ? (buffer_size_ - offset) : len; 
 }
