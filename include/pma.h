@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cmath>
 #include <vector>
+#include <unordered_map>
 #include "block_device.h"
 #include "cache.h"
 
@@ -17,16 +18,17 @@ struct PMASegment {
 
 struct SegmentInfo {
   SegmentInfo() = delete;
-  SegmentInfo(uint64_t _segment_id, uint64_t _num_count) 
+  SegmentInfo(uint64_t _segment_id, uint64_t _num_count)
   : original_key(0), segment_key(0), segment_id(_segment_id), num_count(_num_count) {}
-  SegmentInfo(uint64_t _original_key, uint64_t _segment_key, uint64_t _segment_id, 
-    uint64_t _num_count) : original_key(_original_key), segment_key(_segment_key), 
+  SegmentInfo(uint64_t _original_key, uint64_t _segment_key, uint64_t _segment_id,
+    uint64_t _num_count) : original_key(_original_key), segment_key(_segment_key),
     segment_id(_segment_id), num_count(_num_count) {}
 
   uint64_t original_key; // the original smallest key in this pma. (facilitate updates on pma index.)
   uint64_t segment_key; // the new smallest key .
   uint64_t segment_id; // the segment id (can be deduced from the latter)
   uint64_t num_count; // the address where we see the first inserted element.
+  uint64_t height;
 };
 
 struct PMAUpdateContext {
@@ -39,33 +41,33 @@ struct PMAUpdateContext {
 
   bool filled_empty_segment = false; // when pma slowly grows the segment is filled one by one gradually. Exposing this information helps to index update.
   bool global_rebalance = false; // true when the whole array is reallocated
-  std::vector<SegmentInfo> updated_segment; // updated segment. 
+  std::vector<SegmentInfo> updated_segment; // updated segment.
 };
 
 struct PMADensityOption {
-  uint64_t upper_density_base_upper; // tau_d
-  uint64_t upper_density_base_lower; // tau_0
-  uint64_t lower_density_base_upper; // rho_0
-  uint64_t lower_density_base_lower; // rho_d
+  double upper_density_base_upper; // tau_d
+  double upper_density_base_lower; // tau_0
+  double lower_density_base_upper; // rho_0
+  double lower_density_base_lower; // rho_d
 };
 
 class PMA {
  public:
-  PMA(const std::string& id, int unit_size, int initial_unit_count, 
-    double redundancy_factor, const PMADensityOption& option, Cache* cache)
-    : id_(id), reallocate_count_(0), unit_size_(unit_size), 
+  PMA(const std::string& id, int unit_size, const PMADensityOption& option, Cache* cache)
+    : id_(id), reallocate_count_(0), unit_size_(unit_size),
     last_non_empty_segment_(0), cache_(cache),
     option_(option) {
       assert(cache);
-      segment_size_ =  std::ceil(std::log10(initial_unit_count));
-      segment_count_ = std::ceil(initial_unit_count 
-        / std::log10(initial_unit_count));
-      depth_  = std::ceil(std::log2(segment_count_));
+      segment_size_ = 1;
+      segment_count_ = 1;
+      height_ = 1;
       storage_.reset(new BlockDevice(segment_count_*segment_size_*unit_size_));
+      segment_infos_ = std::unordered_map<uint64_t, std::shared_ptr<SegmentInfo>>();
+      segment_infos_.insert(std::make_pair<uint64_t, std::shared_ptr<SegmentInfo>>(0, std::shared_ptr<SegmentInfo>(new SegmentInfo(0, 0))));
   }
 
   // the user will obtain the segment and perform get logic and additional rebalance (example vEBtree node rearrage).
-  PMASegment Get(uint64_t segment_id) const; 
+  PMASegment Get(uint64_t segment_id) const;
 
   uint64_t Add(const char* item, uint64_t segment_id, PMAUpdateContext* ctx);
 
@@ -95,16 +97,30 @@ class PMA {
   // basic parameters
   const std::string id_;
   int reallocate_count_;
-  int depth_; // the height of logical index binary tree = ceil(log(segment_count_)) 
+  int height_; // the height of logical index binary tree = ceil(log(segment_count_))
   int unit_size_; // bytes per unit.
   uint64_t segment_size_; // in unit
-  uint64_t segment_count_; 
+  uint64_t segment_count_;
   uint64_t last_non_empty_segment_;
   std::unique_ptr<BlockDevice> storage_; // total allocated space is segment_count_*segment_size_*unit_size_.
   Cache* cache_;
+  double redundancy_factor_;
+  std::unordered_map<uint64_t, std::shared_ptr<SegmentInfo>> segment_infos_;
 
   // parameters controlling split, merge, and reallocate
   const PMADensityOption option_;
+
+  double UpperDensityThreshold(int depth);
+
+    double LowerDensityThreshold(int depth);
+
+  std::pair<double, double> GetTargentDensity(int depth);
+
+  bool MustRebalance(uint64_t segment_id, std::shared_ptr<SegmentInfo> info);
+
+  void expand(BlockDevice *newDevice, PMAUpdateContext *ctx);
+
+  void Rebalance(uint64_t segment_id, std::shared_ptr<SegmentInfo> info, PMAUpdateContext *ctx);
 };
 }  // namespace cobtree
 #endif  // COBTREE_PMA_H_

@@ -35,11 +35,12 @@ class BlockDevice {
     return (size + block_size -1) / block_size * block_size;
   }
 
+  std::unique_ptr<char> buffer_;
+
  private:
   const uint64_t block_size_;
   // std::set<uint64_t> in_memory_;
   const uint64_t buffer_size_;
-  std::unique_ptr<char> buffer_;
 };
 
 }  // namespace cobtree
