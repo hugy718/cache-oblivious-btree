@@ -3,7 +3,7 @@
 
 namespace cobtree {
 
-void Cache::Add(const std::string& id, const char* src, uint64_t len) {
+void Cache::Add(const std::string& id, char* src, uint64_t len) {
   assert(len < size_);
   if (Exist(id)) return;
   while (usage_ + len > size_) {

@@ -6,11 +6,6 @@
 
 namespace cobtree {
 
-struct SplitContext {
-  Node* node;
-  
-};
-
 struct TreeCopy {
   uint64_t tree_root_height; // height of the root in the vEBtree before copy.
   uint64_t node_count;
@@ -18,14 +13,49 @@ struct TreeCopy {
   std::unique_ptr<char[]> tree;
 };
 
-class vEBTree : public CoBtree {
+class vEBTree {
  public:
+
+  vEBTree() = delete;
+  vEBTree(uint64_t fanout, uint64_t estimated_unit_count, uint64_t pma_redundancy_factor, 
+    const std::string& uid, const PMADensityOption& pma_options, Cache* cache)
+    : fanout_(fanout), node_size_(sizeof(Node) + sizeof(NodeEntry) * fanout_),
+      root_height_(2), // one leaf and one root will be created
+      pma_(uid, node_size_, estimated_unit_count, pma_redundancy_factor, pma_options, cache),
+      pma_segment_size_(pma_.segment_size()),
+      root_address_(pma_segment_size_-1), // the initial root is at the end of the first segment
+      segment_element_count(pma_segment_size_, 0) {
+      assert(pma_segment_size_ > 10); // a segment needs to be reasonably large
+      // create the fist leaf
+      std::unique_ptr<char[]> first_leaf_buffer{ new char[node_size_] };
+      std::memset(first_leaf_buffer.get(), -1, node_size_);
+      Node* first_leaf = reinterpret_cast<Node*>(first_leaf_buffer.get());
+      first_leaf->parent_addr = root_address_;
+      first_leaf->height = 1;
+      get_children(first_leaf)->key = 0; // points to the first segment in 2nd level PMA.
+      auto segment = pma_.Get(0);
+      std::memcpy((segment.content + pma_segment_size_ - 2 * node_size_),
+        first_leaf_buffer.get(), node_size_);
+
+      // create the root
+      std::unique_ptr<char[]> first_root_buffer{ new char[node_size_] };
+      std:memset(first_root_buffer.get(), -1, node_size_);
+      Node* first_root = reinterpret_cast<Node*>(first_root_buffer.get());
+      first_root->height = 2;
+      auto child = get_children(first_root);
+      child->key = 0; // in out fixed key range of uint64_t 0 is the smallest key.
+      child->addr = pma_segment_size_ - 2;
+      std::memcpy((segment.content + pma_segment_size_ - node_size_),
+        first_root_buffer.get(), node_size_);
+    }
 
   uint64_t Get(uint64_t key);
 
-  void Insert(uint64_t key, uint64_t value);
+  // first level PMA rebalance can trigger update on the nodes key and its parents separator keys.
+  // an API to return the node is helpful.
+  Node* GetNode(uint64_t address);
  
-  void Update(uint64_t key, uint64_t new_key, uint64_t value);
+  void Insert(uint64_t key, uint64_t value);
   
  private:
   //  TODO: for some helper function, the leaf in overall vEBTree might need special treatment while they are leaf in a context of recursive subtree. needs to check through.
@@ -33,7 +63,7 @@ class vEBTree : public CoBtree {
   // return number of nodes of moved tree. facilitate calculation of the end address.
   uint64_t MoveSubtree(uint64_t subtree_root_address, uint64_t height, uint64_t new_address);
 
-  TreeCopy vEBTree::CopySubtree(uint64_t subtree_root_addresss, 
+  TreeCopy CopySubtree(uint64_t subtree_root_addresss, 
     uint64_t height);
 
   void InsertSubtree(const TreeCopy& tree_store, uint64_t new_address);
@@ -57,7 +87,10 @@ class vEBTree : public CoBtree {
   std::vector<uint64_t> GetLeafAddresses(Node* node, uint64_t height);
 
   // when the node children exceeds threshold call this method.
-  bool NodeSplit(Node* node, uint64_t height);
+  void NodeSplit(Node* node, uint64_t height);
+
+  // root_address_ and root_height_ will be updated by this function
+  void AddNewRoot(Node* old_root);
 
   inline NodeEntry* get_children(Node* node) const {
     return reinterpret_cast<NodeEntry*>(node + sizeof(Node));
@@ -95,24 +128,18 @@ class vEBTree : public CoBtree {
     return (child + fanout_ - 1)->addr;
   }
 
-  uint64_t depth_;
-  uint64_t fanout_; // d
+  uint64_t fanout_; // 4d
   // store the parent address and (key and address) of at most 4d children
-  uint64_t node_size_; // 4d * (address size + key size) + address size 
-  // Node root_; // not cached otherwise needs update everytime adding node (to avoid outdated addresses)
-  uint64_t root_address_; // the position of leaf node in pma.
-  bool use_pma;
+  uint64_t node_size_; // 4d * (address size + key size) + address size )
+  uint64_t root_height_; // the height of root node in pma.
   PMA pma_;
+  uint64_t pma_segment_size_; // cached pma segment size
+  uint64_t root_address_; // the position of root node in pma.
 
   // the segment_element_count can be stored at the leading space in a segment
   // or we can store it elsewhere and retrieve it with O(1) cost (reading of such information of adjacent segments can amortize cost).
   // here we store it in memory for simplicity and do not account for the cost of retrieving such information in simulation. (in analysis of the paper, this is not from the dominant term)
   std::vector<uint64_t> segment_element_count;
-
-  // the up pointer from second level pma can be stored at the leading space in a segment
-  // or we can store it elsewhere and retrieve it with O(1) cost (reading of such information of adjacent segments can amortize cost)
-  // here we store it in memory for simplicity and do not account for the cost of retrieving such information in simulation (in analysis of the paper, this is not from the dominant term)
-  std::vector<uint64_t> segment_to_leaf_address;
 };
 
 }  // namespace cobtree

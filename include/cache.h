@@ -14,14 +14,13 @@ namespace cobtree {
 class CacheBlock {
  public:
   CacheBlock() : len_(0), content_(nullptr) {}
-  inline void FillContent(const char* src, uint64_t len) {
+  inline void FillContent(char* src, uint64_t len) {
     len_ = len;
-    content_.reset(new char[len]);
-    std::memcpy(content_.get(), src, len);
+    content_ = src;
   }
 
   inline uint64_t len() const { return len_; }
-  inline char* data() const { return content_.get(); }
+  inline char* data() const { return content_; }
 
   ~CacheBlock() = default;
 
@@ -36,7 +35,7 @@ class Cache {
   Cache(uint64_t size) : size_(size), usage_(0) {}
   ~Cache() = default;
 
-  void Add(const std::string& id, const char* src, uint64_t len);
+  void Add(const std::string& id, char* src, uint64_t len);
 
   inline bool Exist(const std::string& id) const { 
     return contents_.find(id) != contents_.end(); 
