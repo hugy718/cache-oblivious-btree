@@ -25,9 +25,8 @@ void PMA::Add(const char *item, uint64_t segment_id, uint64_t pos, PMAUpdateCont
   // to make space for insertion
   std::memcpy(segment.content, segment.content + item_size_, pos * item_size_);
   std::memcpy(segment.content + pos * item_size_, item, item_size_);
-  item_count_[segment_id]++;
   if (pos = segment_size_ - 1) {
-    ctx->updated_segment.emplace_back(segment_id);
+    ctx->updated_segment.emplace_back(segment_id, ++item_count_[segment_id]);
   }
 
   // perform rebalance if needed.

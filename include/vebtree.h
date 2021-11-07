@@ -21,7 +21,7 @@ class vEBTree {
     const std::string& uid, const PMADensityOption& pma_options, Cache* cache)
     : fanout_(fanout), node_size_(sizeof(Node) + sizeof(NodeEntry) * fanout_),
       root_height_(2), // one leaf and one root will be created
-      pma_(uid, node_size_, estimated_unit_count, pma_redundancy_factor, pma_options, cache),
+      pma_(uid, node_size_, estimated_unit_count * pma_redundancy_factor, pma_options, cache),
       pma_segment_size_(pma_.segment_size()),
       root_address_(pma_segment_size_-1), // the initial root is at the end of the first segment
       segment_element_count(pma_segment_size_, 0) {

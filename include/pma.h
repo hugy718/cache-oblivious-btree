@@ -60,8 +60,8 @@ class PMA {
       assert(cache_);
       assert(segment_count_ * segment_size_ > estimated_item_count);
 #ifndef NDEBUG
-    printf("Debug print: The PMA contains %llu segment, each size of %llu. \ 
-      each item has size %llu", segment_count_, segment_size_, item_size_);
+    printf("Debug print: The PMA contains %lu segment, each size of %lu. \
+      each item has size %lu", segment_count_, segment_size_, item_size_);
 #endif // NDEBUG
   }
 
@@ -89,7 +89,7 @@ class PMA {
       - option_.upper_density_base_lower) * depth(height) / (height-1);  
   }
 
-  inline double LowerDensityThreshold(int heihgt) { /*not implemented*/ }
+  inline double LowerDensityThreshold(int heihgt) { /*not implemented*/ return 0.0;}
 
   // only called by Rebalance
   void RebalanceRange(uint64_t left_id, uint64_t right_id, uint64_t item_count,
@@ -124,7 +124,7 @@ class PMA {
   // basic parameters
   const std::string id_;
   // int reallocate_count_;
-  int item_size_; // bytes per unit.
+  uint64_t item_size_; // bytes per unit.
   uint64_t segment_size_; // in unit
   uint64_t segment_count_;
   int height_; // the height of logical index binary tree = ceil(log(segment_count_))
