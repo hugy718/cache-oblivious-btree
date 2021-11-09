@@ -5,16 +5,27 @@
 
 namespace cobtree {
 
-uint64_t vEBTree::Get(uint64_t key) {
+/**
+ * @brief perfrom get in van Emde Boas layout tree. The value returned is 
+ *  from the leaf value that has the largest key smaller than the lookup key.
+ * 
+ * @param key search key 
+ * @param pma_address address in the PMA where vEB Tree is stored
+ * @return uint64_t leaf value
+ */
+uint64_t vEBTree::Get(uint64_t key, uint64_t* pma_address) {
   bool is_leaf = false;
   // obtain the root node and the address of the target child
+  auto last_address = root_address_;
   auto address = child_to_search(GetNode(root_address_), key, &is_leaf);
   // need to traverse down the tree
   while(!is_leaf) {
     auto node = GetNode(address); 
+    last_address = address;
     address = child_to_search(node, key, &is_leaf);
     if (is_leaf) break;
   }
+  *pma_address = last_address;
   return address;
 }
 
@@ -570,6 +581,133 @@ void vEBTree::AddNewRoot(Node* old_root) {
   auto root_moved = AddNodeToPMA(new_root, root_address_, &landed_address, &ctx);
   // cached info update
   if (root_moved) root_address_ = landed_address;
+}
+
+namespace {
+
+/**
+ * @brief Get the idx of child with addr value;
+ * 
+ * @param node the children nodes to search
+ * @param len number of children nodes to search
+ * @param addr the address to match
+ * @param checker true a child with matching value found; false otherwise
+ * @return uint64_t return idx of the child with matching value
+ */
+uint64_t GetChildIdx(const NodeEntry* node, uint64_t len, uint64_t addr,
+  bool* checker = nullptr) {
+  assert(node);
+  assert(len > 1);
+  auto end = node + len;
+  int curr_idx = 0;
+  while (node != end) {
+    if(node->addr == UINT64_MAX) break;
+    if (node->addr == addr) {
+      if (checker) *checker = true;
+      return curr_idx;
+    }
+    curr_idx++;
+    node++;
+  } 
+  if(checker) *checker = false;
+  return len;
+}
+
+/**
+ * @brief Get the Right Most Child Address 
+ * 
+ * @param node the children node to search
+ * @param len number of children nodes to search
+ * @param checker true a child with valid address found; false otherwise
+ * @return uint64_t 
+ */
+uint64_t GetRightMostChildAddress(const NodeEntry* node, uint64_t len, 
+  bool* checker = nullptr) {
+  assert(node);
+  assert(len > 1);
+  auto curr = node + len - 1;
+  int curr_idx = len - 1;
+  if (checker) *checker = true;
+  do {
+    if(curr->addr != UINT64_MAX) return curr->addr;
+    curr--;
+  } while (curr != node); 
+  if(checker) *checker = false;
+  return len;
+}
+
+}  // anonymous namespace
+
+void vEBTreeBackwardIterator::Prev() {
+  if (!valid_) return; // valid_ set false means we are at the first leaf.
+  auto curr_address = curr_->parent_addr;
+  auto curr = tree_->GetNode(curr_address);
+  bool checker;
+  auto idx = GetChildIdx(vEBTree::get_children(curr), tree_->fanout_,
+    curr_address, &checker);
+  assert(checker);
+  // continue to move upward
+  while (idx == 0) {
+    // fast path, we were at the first leaf in tree. no more in front
+    if(curr->height == tree_->root_height_) {
+      valid_ = false;
+      return;
+    }
+    curr_address = curr_->parent_addr;
+    curr = tree_->GetNode(curr_address);
+    idx = GetChildIdx(vEBTree::get_children(curr), tree_->fanout_,
+      curr_address, &checker);
+    assert(checker);
+  }
+
+  // we are at a node where we have a child in front not visited
+  // go all the way to the right most leaf under this unvisited child
+  auto unvisited_child = vEBTree::get_children(curr) + (idx-1);
+  curr = tree_->GetNode(unvisited_child->addr);
+  while(curr->height != 1) {
+    // move further down
+    auto children = vEBTree::get_children(curr);
+    curr_address = GetRightMostChildAddress(children,
+      tree_->fanout_, &checker);
+    assert(checker);
+    curr = tree_->GetNode(curr_address);
+  }
+  curr_address_ = curr_address;
+  curr_ = curr;
+}
+
+void vEBTreeForwardIterator::Next() {
+  if (!valid_) return; // valid_ set false means we are at the last leaf.
+  auto curr_address = curr_->parent_addr;
+  auto curr = tree_->GetNode(curr_address);
+  bool checker;
+  auto idx = GetChildIdx(vEBTree::get_children(curr), tree_->fanout_,
+    curr_address, & checker);
+  assert(checker);
+  while (idx == GetRightMostChildAddress(vEBTree::get_children(curr),
+    tree_->fanout_, &checker)) {
+    if(curr->height == tree_->root_height_) {
+      valid_ = false;
+      return;
+    }
+    curr_address = curr->parent_addr;
+    curr = tree_->GetNode(curr_address);
+    idx = GetChildIdx(vEBTree::get_children(curr), tree_->fanout_,
+      curr_address, & checker);
+    assert(checker);
+  }
+
+  // we are at a node where we have a child in next not visited
+  // go all the way to the left most leaf under this unvisited child
+  auto unvisited_child = vEBTree::get_children(curr) + (idx+1);
+  curr = tree_->GetNode(unvisited_child->addr);
+  while(curr->height != 1) {
+    curr_address = vEBTree::get_children(curr)->addr;
+    assert(curr_address != UINT64_MAX);
+    curr = tree_->GetNode(curr_address);
+  }
+  curr_address_ = curr_address;
+  curr_ = curr;
 }
 
 }  // namespace cobtree

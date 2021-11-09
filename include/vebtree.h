@@ -13,6 +13,55 @@ struct TreeCopy {
   std::unique_ptr<char[]> tree;
 };
 
+// struct ItrNodeStackEntry{
+//   uint64_t curr_child_idx;
+//   std::vector<NodeEntry> children;
+// };
+
+// helper class 
+class vEBTreeBackwardIterator {
+ public:
+  vEBTreeBackwardIterator(vEBTree* tree, uint64_t leaf_address)
+    : valid_(true), curr_address_(leaf_address), tree_(tree), 
+    curr_(tree_->GetNode(leaf_address)) {}
+  
+  bool valid() const { return valid_ && (curr_->height == 1); }
+
+  // move to the previous leaf node
+  void Prev();
+  
+  // check valid() first
+  Node* node() { return curr_; }
+
+ private:
+  bool valid_;
+  uint64_t curr_address_;
+  vEBTree* tree_;
+  Node* curr_;
+};
+
+class vEBTreeForwardIterator {
+ public:
+  vEBTreeForwardIterator(vEBTree* tree, uint64_t leaf_address)
+    : valid_(true), curr_address_(leaf_address), tree_(tree), 
+    curr_(tree_->GetNode(leaf_address)) {}
+  
+  bool valid() const { return valid_ && (curr_->height == 1); }
+
+  // move to the next leaf node
+  void Next();
+
+  // check valid() first
+  Node* node() { return curr_; }
+
+ private:
+  bool valid_;
+  uint64_t curr_address_;
+  vEBTree* tree_;
+  Node* curr_;
+};
+
+
 class vEBTree {
  public:
 
@@ -49,7 +98,15 @@ class vEBTree {
         first_root_buffer.get(), node_size_);
     }
 
-  uint64_t Get(uint64_t key);
+  /**
+   * @brief perfrom get in van Emde Boas layout tree. The value returned is 
+   *  from the leaf value that has the largest key smaller than the lookup key.
+   * 
+   * @param key search key 
+   * @param pma_address address in the PMA where vEB Tree is stored
+   * @return uint64_t leaf value
+   */
+  uint64_t Get(uint64_t key, uint64_t* pma_address);
 
   // first level PMA rebalance can trigger update on the nodes key and its parents separator keys.
   // an API to return the node is helpful.
@@ -57,7 +114,15 @@ class vEBTree {
  
   void Insert(uint64_t key, uint64_t value);
   
+  static NodeEntry* get_children(Node* node) {
+    return reinterpret_cast<NodeEntry*>(node + sizeof(Node));
+  }
+
+  inline uint64_t fanout() const { return fanout_; }
+
  private:
+  friend vEBTreeForwardIterator;
+  friend vEBTreeBackwardIterator;
   //  TODO: for some helper function, the leaf in overall vEBTree might need special treatment while they are leaf in a context of recursive subtree. needs to check through.
 
   // return number of nodes of moved tree. facilitate calculation of the end address.
@@ -92,9 +157,6 @@ class vEBTree {
   // root_address_ and root_height_ will be updated by this function
   void AddNewRoot(Node* old_root);
 
-  inline NodeEntry* get_children(Node* node) const {
-    return reinterpret_cast<NodeEntry*>(node + sizeof(Node));
-  }
 
   inline const NodeEntry* get_children(const Node* node) const {
     return reinterpret_cast<const NodeEntry*>(node + sizeof(Node));
