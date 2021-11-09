@@ -593,6 +593,7 @@ bool vEBTree::AddNewRoot(Node* old_root) {
   if (!success) return false;
   // cached info update
   if (root_moved) root_address_ = landed_address;
+  return true;
 }
 
 namespace {

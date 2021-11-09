@@ -1,7 +1,6 @@
 #ifndef COBTREE_VEBTREE_H_
 #define COBTREE_VEBTREE_H_
 
-#include "cobtree.h"
 #include "pma.h"
 
 namespace cobtree {
@@ -13,58 +12,12 @@ struct TreeCopy {
   std::unique_ptr<char[]> tree;
 };
 
-// struct ItrNodeStackEntry{
-//   uint64_t curr_child_idx;
-//   std::vector<NodeEntry> children;
-// };
-
 // helper class 
-class vEBTreeBackwardIterator {
- public:
-  vEBTreeBackwardIterator(vEBTree* tree, uint64_t leaf_address)
-    : valid_(true), curr_address_(leaf_address), tree_(tree), 
-    curr_(tree_->GetNode(leaf_address)) {}
-  
-  bool valid() const { return valid_ && (curr_->height == 1); }
-
-  // move to the previous leaf node
-  void Prev();
-  
-  // check valid() first
-  Node* node() { return curr_; }
-
- private:
-  bool valid_;
-  uint64_t curr_address_;
-  vEBTree* tree_;
-  Node* curr_;
-};
-
-class vEBTreeForwardIterator {
- public:
-  vEBTreeForwardIterator(vEBTree* tree, uint64_t leaf_address)
-    : valid_(true), curr_address_(leaf_address), tree_(tree), 
-    curr_(tree_->GetNode(leaf_address)) {}
-  
-  bool valid() const { return valid_ && (curr_->height == 1); }
-
-  // move to the next leaf node
-  void Next();
-
-  // check valid() first
-  Node* node() { return curr_; }
-
- private:
-  bool valid_;
-  uint64_t curr_address_;
-  vEBTree* tree_;
-  Node* curr_;
-};
-
+class vEBTreeForwardIterator;
+class vEBTreeBackwardIterator;
 
 class vEBTree {
  public:
-
   vEBTree() = delete;
   vEBTree(uint64_t fanout, uint64_t estimated_unit_count, uint64_t pma_redundancy_factor, 
     const std::string& uid, const PMADensityOption& pma_options, Cache* cache)
@@ -212,6 +165,48 @@ class vEBTree {
   // or we can store it elsewhere and retrieve it with O(1) cost (reading of such information of adjacent segments can amortize cost).
   // here we store it in memory for simplicity and do not account for the cost of retrieving such information in simulation. (in analysis of the paper, this is not from the dominant term)
   std::vector<uint64_t> segment_element_count;
+};
+
+class vEBTreeBackwardIterator {
+ public:
+  vEBTreeBackwardIterator(vEBTree* tree, uint64_t leaf_address)
+    : valid_(true), curr_address_(leaf_address), tree_(tree), 
+    curr_(tree_->GetNode(leaf_address)) {}
+  
+  bool valid() const { return valid_ && (curr_->height == 1); }
+
+  // move to the previous leaf node
+  void Prev();
+  
+  // check valid() first
+  Node* node() { return curr_; }
+
+ private:
+  bool valid_;
+  uint64_t curr_address_;
+  vEBTree* tree_;
+  Node* curr_;
+};
+
+class vEBTreeForwardIterator {
+ public:
+  vEBTreeForwardIterator(vEBTree* tree, uint64_t leaf_address)
+    : valid_(true), curr_address_(leaf_address), tree_(tree), 
+    curr_(tree_->GetNode(leaf_address)) {}
+  
+  bool valid() const { return valid_ && (curr_->height == 1); }
+
+  // move to the next leaf node
+  void Next();
+
+  // check valid() first
+  Node* node() { return curr_; }
+
+ private:
+  bool valid_;
+  uint64_t curr_address_;
+  vEBTree* tree_;
+  Node* curr_;
 };
 
 }  // namespace cobtree

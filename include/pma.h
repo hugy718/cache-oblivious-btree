@@ -84,6 +84,7 @@ class PMA {
 
   // This when rewrite the segment will put the item at pos.
   // needed for
+  // return false if full. true otherwise
   bool Add(const char* item, uint64_t segment_id, uint64_t pos, 
     PMAUpdateContext* ctx);
 
