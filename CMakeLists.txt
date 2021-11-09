@@ -14,7 +14,6 @@ add_library(cobtree SHARED
   "${PROJECT_SOURCE_DIR}/src/cache.cc"
   "${PROJECT_SOURCE_DIR}/include/cache.h"
   "${PROJECT_SOURCE_DIR}/src/cobtree.cc"
-  "${PROJECT_SOURCE_DIR}/include/cobtree_impl.h"
   "${PROJECT_SOURCE_DIR}/include/cobtree.h"
   "${PROJECT_SOURCE_DIR}/src/pma.cc"
   "${PROJECT_SOURCE_DIR}/include/pma.h"
