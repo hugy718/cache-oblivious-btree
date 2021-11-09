@@ -14,6 +14,7 @@ namespace cobtree {
 struct PMASegment {
   char* content;
   uint64_t len;
+  uint64_t num_item;
 };
 
 struct SegmentInfo {
@@ -31,6 +32,15 @@ struct PMAUpdateContext {
     filled_empty_segment = false;
     // global_rebalance = false;
     updated_segment.clear();
+  }
+
+  // copy assignment operator
+  PMAUpdateContext& operator=(const PMAUpdateContext& other){
+    if (this != &other) {
+      filled_empty_segment = other.filled_empty_segment;
+      updated_segment = other.updated_segment;
+    }
+    return *this;
   }
 
   bool filled_empty_segment = false; // when pma slowly grows the segment is filled one by one gradually. Exposing this information helps to index update.
@@ -74,10 +84,13 @@ class PMA {
 
   // This when rewrite the segment will put the item at pos.
   // needed for
-  void Add(const char* item, uint64_t segment_id, uint64_t pos, 
+  bool Add(const char* item, uint64_t segment_id, uint64_t pos, 
     PMAUpdateContext* ctx);
 
   inline uint64_t segment_size() const { return segment_size_; }
+  inline uint64_t segment_count() const { return segment_count_; }
+  inline uint64_t last_non_empty_segment() const {
+    return last_non_empty_segment_; }
 
  private:
 

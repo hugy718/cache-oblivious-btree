@@ -39,7 +39,7 @@ Node* vEBTree::GetNode(uint64_t address) {
 }
 
 // Insert in our simulated use case of growing vEBTree, only insert at the tail end, after rebalance fill up new segemnts.
-void vEBTree::Insert(uint64_t key, uint64_t value) {
+bool vEBTree::Insert(uint64_t key, uint64_t value) {
   // create a new leaf node
   std::unique_ptr<char[]> buffer(new char[node_size_]);
   std::memset(buffer.get(), -1, node_size_);
@@ -64,7 +64,10 @@ void vEBTree::Insert(uint64_t key, uint64_t value) {
   assert(address % pma_segment_size_ != 0);
   uint64_t landed_address;
   PMAUpdateContext ctx;
-  auto root_moved = AddNodeToPMA(new_leaf, address-1, &landed_address, &ctx);
+  bool success;
+  auto root_moved = AddNodeToPMA(new_leaf, address-1, &landed_address, 
+    &ctx, &success);
+  if (!success) return false; // pma no space.
   // change the root if moved
   if (root_moved) {
     root_address_ = (ctx.updated_segment.back().segment_id + 1) 
@@ -72,7 +75,8 @@ void vEBTree::Insert(uint64_t key, uint64_t value) {
   } 
 
   // add the leaf node to parent
-  AddChildToNode(GetNode(landed_address)->parent_addr, landed_address, key);
+  return AddChildToNode(GetNode(landed_address)->parent_addr, 
+    landed_address, key);
 }
 
 // for now use a copy then insert. maybe better to implement its own logic
@@ -346,13 +350,15 @@ struct RebalancePointerAdjustementCtx{
 }  // anonymous namespace
 
 bool vEBTree::AddNodeToPMA(const Node* node, uint64_t address, 
-  uint64_t* landed_address, PMAUpdateContext* ctx) {
+  uint64_t* landed_address, PMAUpdateContext* ctx, bool* success) {
   // insert to the designated segment first.
+  assert(landed_address);
   assert(ctx);
+  assert(success);
   ctx->clear(); 
   auto segment_id = address / pma_segment_size_;
   auto segment_offset = address - segment_id * pma_segment_size_;
-  pma_.Add(reinterpret_cast<const char*>(node), segment_id, 
+  *success = pma_.Add(reinterpret_cast<const char*>(node), segment_id, 
     segment_offset, ctx);
 
   // update the count before rebalance.
@@ -405,7 +411,7 @@ bool vEBTree::AddNodeToPMA(const Node* node, uint64_t address,
 
 // this function only add the entry under the parent node. 
 // if we have the child node at hand we can easily figure out the key being its first child key.
-void vEBTree::AddChildToNode(uint64_t node_address, uint64_t child_address, uint64_t child_key) {
+bool vEBTree::AddChildToNode(uint64_t node_address, uint64_t child_address, uint64_t child_key) {
   auto node = GetNode(node_address);
   bool done = false;
   int child_count = 0;
@@ -421,7 +427,7 @@ void vEBTree::AddChildToNode(uint64_t node_address, uint64_t child_address, uint
     break;
   }
   assert(done);
-  if (child_count == fanout_) NodeSplit(node, node->height);
+  return (child_count == fanout_) ? NodeSplit(node, node->height) : true;
 }
 
 // leaf node height = 1.
@@ -471,10 +477,11 @@ std::vector<uint64_t> vEBTree::GetLeafAddresses(Node* node, uint64_t height) {
 }
 
 // end with call to AddChildToNode, which potentially call NodeSplit on parent node.
-void vEBTree::NodeSplit(Node* node, uint64_t height) {
+bool vEBTree::NodeSplit(Node* node, uint64_t height) {
   // handle root node split.
   if (node->height == root_height_) {
-    AddNewRoot(node);
+    auto success = AddNewRoot(node);
+    if (!success) return false;
     // we need to reassign the node pointer.
     // the old node would be the first child of root
     auto old_node = GetNode(root_address_);
@@ -512,8 +519,10 @@ void vEBTree::NodeSplit(Node* node, uint64_t height) {
   // actually all nodes including this one at insert address and before are shifted one places front. // if exceeds density requirement, need rebalance. 
   PMAUpdateContext ctx;
   uint64_t landed_address;
+  bool success;
   auto root_moved = AddNodeToPMA(new_node, insert_address, &landed_address, 
-    &ctx);
+    &ctx, &success);
+  if (!success) return false;
   if (root_moved) {
     root_address_ = (ctx.updated_segment.back().segment_id + 1) 
       + pma_segment_size_ - 1;
@@ -564,10 +573,11 @@ void vEBTree::NodeSplit(Node* node, uint64_t height) {
 
   // now we need to read the inserted node first
   node = GetNode(landed_address);
-  AddChildToNode(node->parent_addr, landed_address, get_children(node)->key);
+  return AddChildToNode(node->parent_addr, landed_address, get_children(node)->key);
 }
 
-void vEBTree::AddNewRoot(Node* old_root) {
+
+bool vEBTree::AddNewRoot(Node* old_root) {
   std::unique_ptr<char[]> new_root_buffer(new char[node_size_]);
   std::memset(new_root_buffer.get(), -1, node_size_);
   Node* new_root = reinterpret_cast<Node* >(new_root_buffer.get());
@@ -578,7 +588,9 @@ void vEBTree::AddNewRoot(Node* old_root) {
 
   uint64_t landed_address;
   PMAUpdateContext ctx;
-  auto root_moved = AddNodeToPMA(new_root, root_address_, &landed_address, &ctx);
+  bool success;
+  auto root_moved = AddNodeToPMA(new_root, root_address_, &landed_address, &ctx, &success);
+  if (!success) return false;
   // cached info update
   if (root_moved) root_address_ = landed_address;
 }

@@ -14,10 +14,10 @@ PMASegment PMA::Get(uint64_t segment_id) const {
     // add it to cache.
     cache_->Add(cache_key, ptr, read_len);
   }
-  return PMASegment{ptr, segment_size_};
+  return PMASegment{ptr, segment_size_, item_count_[segment_id]};
 }
 
-void PMA::Add(const char *item, uint64_t segment_id, uint64_t pos, PMAUpdateContext *ctx) {
+bool PMA::Add(const char *item, uint64_t segment_id, uint64_t pos, PMAUpdateContext *ctx) {
   PMASegment segment = Get(segment_id);
   // by construction, when executed correctly, PMA never reaches a status where we have no free space in a segment.
   assert(pos > 0);
@@ -30,7 +30,7 @@ void PMA::Add(const char *item, uint64_t segment_id, uint64_t pos, PMAUpdateCont
   }
 
   // perform rebalance if needed.
-  Rebalance(segment_id, ctx);
+  return Rebalance(segment_id, ctx);
 }
 
 void PMA::RebalanceRange(uint64_t left, uint64_t right, uint64_t item_count,

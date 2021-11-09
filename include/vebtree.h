@@ -112,7 +112,7 @@ class vEBTree {
   // an API to return the node is helpful.
   Node* GetNode(uint64_t address);
  
-  void Insert(uint64_t key, uint64_t value);
+  bool Insert(uint64_t key, uint64_t value);
   
   static NodeEntry* get_children(Node* node) {
     return reinterpret_cast<NodeEntry*>(node + sizeof(Node));
@@ -133,16 +133,25 @@ class vEBTree {
 
   void InsertSubtree(const TreeCopy& tree_store, uint64_t new_address);
   
-  // add the content under node to the address to PMA.
-  // and then update the addresses
-  // return if the root is moved. (we can update the cached value here)
-  // return the node actual address after possibly rebalancing in landed_address 
+  /**
+   * @brief add the content under node to the address to PMA.
+   * and then update the addresses
+   * 
+   * @param node 
+   * @param address 
+   * @param landed_address return the node actual address after possibly rebalancing in landed_address 
+   * @param ctx return pma update context
+   * @param success return if pma insertion succeeds (false if no space)
+   * @return true the root is moved
+   * @return false 
+   */
   bool AddNodeToPMA(const Node* node, uint64_t address, 
-    uint64_t* landed_address, PMAUpdateContext* ctx); 
+    uint64_t* landed_address, PMAUpdateContext* ctx, bool* success); 
 
   // this function only add the entry under the parent node. 
   // if we have the child node at hand we can easily figure out the key being its first child key.
-  void AddChildToNode(uint64_t node_address, uint64_t child_address, uint64_t child_key);
+  // return false if pma no space
+  bool AddChildToNode(uint64_t node_address, uint64_t child_address, uint64_t child_key);
 
   // calculate the subtree height for a node at this height in a vEBTree.
   uint64_t SubtreeHeight(uint64_t height) const ;
@@ -152,10 +161,11 @@ class vEBTree {
   std::vector<uint64_t> GetLeafAddresses(Node* node, uint64_t height);
 
   // when the node children exceeds threshold call this method.
-  void NodeSplit(Node* node, uint64_t height);
+  bool NodeSplit(Node* node, uint64_t height);
 
   // root_address_ and root_height_ will be updated by this function
-  void AddNewRoot(Node* old_root);
+  // return false if no more space
+  bool AddNewRoot(Node* old_root);
 
 
   inline const NodeEntry* get_children(const Node* node) const {
