@@ -30,9 +30,9 @@ uint64_t vEBTree::Get(uint64_t key, uint64_t* pma_address) {
 }
 
 Node* vEBTree::GetNode(uint64_t address) {
-  auto segment_id = address / pma_segment_size_;
+  auto segment_id = address / item_per_segment;
   auto segment = pma_.Get(segment_id);
-  auto segment_offset = root_address_ - segment_id * pma_segment_size_; 
+  auto segment_offset = address - segment_id * item_per_segment; 
   assert(segment.len > segment_offset + node_size_);
   return reinterpret_cast<Node*>(segment.content 
     + segment_offset * node_size_); 
@@ -61,7 +61,7 @@ bool vEBTree::Insert(uint64_t key, uint64_t value) {
   }
 
   new_leaf->parent_addr = last_address;
-  assert(address % pma_segment_size_ != 0);
+  assert(address % item_per_segment != 0);
   uint64_t landed_address;
   PMAUpdateContext ctx;
   bool success;
@@ -71,7 +71,7 @@ bool vEBTree::Insert(uint64_t key, uint64_t value) {
   // change the root if moved
   if (root_moved) {
     root_address_ = (ctx.updated_segment.back().segment_id + 1) 
-      + pma_segment_size_ - 1;
+      + item_per_segment - 1;
   } 
 
   // add the leaf node to parent
@@ -101,22 +101,22 @@ TreeCopy vEBTree::CopySubtree(uint64_t subtree_root_address, uint64_t height) {
   std::vector<uint64_t> empty_spaces{0}; // store the aggregate empty spaces for address readjustment, first segment to copy needs no adjustement wrt empty spaces
 
   // instantiate the two vectors.
-  auto segment_id = subtree_root_address / pma_segment_size_;
+  auto segment_id = subtree_root_address / item_per_segment;
   uint64_t temp = 0;
   while ((temp < cap_tree_size) && (segment_id > 0)) {
     temp += segment_element_count[segment_id];
     segment_source.emplace_back(segment_id, segment_element_count[segment_id]);
     empty_spaces.emplace_back(empty_spaces.back() 
-      + pma_segment_size_ - segment_element_count[segment_id]);
+      + item_per_segment - segment_element_count[segment_id]);
     segment_id--;
   }
   // add the first segment
   if (temp < cap_tree_size) segment_source.emplace_back(SegmentInfo(segment_id, segment_element_count.front()));
 
   // the offset in the PMA to start copy
-  segment_id = subtree_root_address / pma_segment_size_;
+  segment_id = subtree_root_address / item_per_segment;
   auto copy_source_offset = subtree_root_address;
-  auto copy_segment_offset = subtree_root_address - segment_id*pma_segment_size_;
+  auto copy_segment_offset = subtree_root_address - segment_id*item_per_segment;
   // dest_it
   Node* dest_it = reinterpret_cast<Node*>(buffer.get() + (cap_tree_size-1) * node_size_);
   bool finished = false;
@@ -125,7 +125,8 @@ TreeCopy vEBTree::CopySubtree(uint64_t subtree_root_address, uint64_t height) {
     (!finished && (source_it != segment_source.end())); 
     source_it++) {
     // num_element to copy in the current segment
-    auto num_to_copy = source_it->num_count - (pma_segment_size_ - copy_segment_offset);
+    auto num_to_copy = source_it->num_count - (item_per_segment 
+      - copy_segment_offset);
     // load the segment
     auto segment = pma_.Get(source_it->segment_id);
     // point to the place to copy
@@ -139,7 +140,7 @@ TreeCopy vEBTree::CopySubtree(uint64_t subtree_root_address, uint64_t height) {
       // for non-root node we update the parent pointer
       if (dest_it->height != height) {
         dest_it->parent_addr = subtree_root_address - dest_it->parent_addr 
-          - empty_spaces[segment_id - dest_it->parent_addr/pma_segment_size_]; 
+          - empty_spaces[segment_id - dest_it->parent_addr/item_per_segment]; 
       }
       // for non-leaf node we update the children address
       if (dest_it->height != leaf_height) {
@@ -149,7 +150,7 @@ TreeCopy vEBTree::CopySubtree(uint64_t subtree_root_address, uint64_t height) {
           last_address_to_copy = std::min(last_address_to_copy, child->addr);
           // adjust children address. Note that for non-leaf node, its child will be copied.
           child->addr = subtree_root_address - child->addr 
-            - empty_spaces[segment_id - child->addr/pma_segment_size_];
+            - empty_spaces[segment_id - child->addr/item_per_segment];
         }
       } else if (copy_source_offset == last_address_to_copy) {
         // we encounter the last leaf to copy
@@ -163,8 +164,8 @@ TreeCopy vEBTree::CopySubtree(uint64_t subtree_root_address, uint64_t height) {
     }
 
     // move to the next segment
-    copy_source_offset = pma_segment_size_;
-    copy_segment_offset = source_it->segment_id * pma_segment_size_; 
+    copy_source_offset -= source_it->segment_id * item_per_segment;
+    copy_segment_offset = item_per_segment - 1; 
   }
 
   return TreeCopy{height, node_count, cap_tree_size, std::move(buffer)};
@@ -178,15 +179,16 @@ void vEBTree::InsertSubtree(const TreeCopy& tree, uint64_t new_address) {
   // ultimate termination criteria
   uint64_t total_to_copy = tree.node_count;
 
-  auto segment_id = new_address / pma_segment_size_;
+  auto segment_id = new_address / item_per_segment;
 
   // initialize the destination information
-  auto segment_offset = new_address - segment_id * pma_segment_size_;
-  auto temp = segment_element_count[segment_id] - (pma_segment_size_ -segment_offset);  
+  auto segment_offset = new_address - segment_id * item_per_segment;
+  auto temp = segment_element_count[segment_id] - (item_per_segment   
+    - segment_offset);  
   std::vector<SegmentInfo> segment_dest{SegmentInfo{segment_id, temp}}; // store the information of segments to be copied
   std::vector<uint64_t> empty_spaces; // additional offset needed for every segment difference. here the first entry is the number of space padded if the base offset exceeds the number of elements in the first segment to cover.
   while ((temp < tree.node_count) && segment_id > 0) {
-    empty_spaces.emplace_back(pma_segment_size_ - segment_element_count[segment_id]);
+    empty_spaces.emplace_back(item_per_segment - segment_element_count[segment_id]);
     segment_id--;
     temp += segment_element_count[segment_id];
     segment_dest.emplace_back(segment_id, segment_element_count[segment_id]);
@@ -202,7 +204,7 @@ void vEBTree::InsertSubtree(const TreeCopy& tree, uint64_t new_address) {
     auto segment = pma_.Get(dest_segment_it->segment_id);
     // point to the first position to copy.
     Node* dest_it = reinterpret_cast<Node*>(segment.content 
-      + ((pma_segment_size_ 
+      + ((item_per_segment 
         - segment_element_count[dest_segment_it->segment_id]) 
         + dest_segment_it->num_count) * node_size_);
     auto num_to_copy = dest_segment_it->num_count;
@@ -253,7 +255,7 @@ void vEBTree::InsertSubtree(const TreeCopy& tree, uint64_t new_address) {
       source_it = get_next_node_in_segment(dest_it);
       copy_dest_offset--;
     }
-    if (dest_segment_it->segment_id > 0) copy_dest_offset = pma_segment_size_ 
+    if (dest_segment_it->segment_id > 0) copy_dest_offset = item_per_segment 
       * (dest_segment_it->segment_id - 1);
   }
 }
@@ -356,8 +358,8 @@ bool vEBTree::AddNodeToPMA(const Node* node, uint64_t address,
   assert(ctx);
   assert(success);
   ctx->clear(); 
-  auto segment_id = address / pma_segment_size_;
-  auto segment_offset = address - segment_id * pma_segment_size_;
+  auto segment_id = address / item_per_segment;
+  auto segment_offset = address - segment_id * item_per_segment;
   *success = pma_.Add(reinterpret_cast<const char*>(node), segment_id, 
     segment_offset, ctx);
 
@@ -366,13 +368,13 @@ bool vEBTree::AddNodeToPMA(const Node* node, uint64_t address,
 
   // update addresses
   RebalancePointerAdjustementCtx address_adjust{*ctx, 
-    segment_element_count, pma_segment_size_};
+    segment_element_count, item_per_segment};
   for (auto s : ctx->updated_segment) {
     auto segment = pma_.Get(s.segment_id); 
     auto node_it = reinterpret_cast<Node*>(segment.content 
-      + pma_segment_size_ * node_size_);
+      + (item_per_segment-1) * node_size_);
     auto num_elements = s.num_count;
-    auto cur_address = (s.segment_id+1) * pma_segment_size_ - 1;
+    auto cur_address = (s.segment_id+1) * item_per_segment - 1;
     while (num_elements > 0) {
       if (!address_adjust.AdjustAddress(node_it->parent_addr,
         &(node_it->parent_addr))) {
@@ -525,7 +527,7 @@ bool vEBTree::NodeSplit(Node* node, uint64_t height) {
   if (!success) return false;
   if (root_moved) {
     root_address_ = (ctx.updated_segment.back().segment_id + 1) 
-      + pma_segment_size_ - 1;
+      * item_per_segment - 1;
   } 
 
   // copy the new node subtree
@@ -549,22 +551,22 @@ bool vEBTree::NodeSplit(Node* node, uint64_t height) {
     auto num_node_copied = MoveSubtree(tree_root_address, 
       height-SubtreeHeight(height), dest_address);
     // find the next dest position to copy;
-    auto segment_it = dest_address / pma_segment_size_;
-    auto segment_offset = dest_address - pma_segment_size_ * segment_it;
+    auto segment_it = dest_address / item_per_segment;
+    auto segment_offset = dest_address - item_per_segment * segment_it;
     dest_address -= std::min(num_node_copied, 
-      segment_element_count[segment_it] - (pma_segment_size_ - segment_offset));
+      segment_element_count[segment_it] - (item_per_segment - segment_offset));
     num_node_copied -= std::min(num_node_copied, 
-      segment_element_count[segment_it] - (pma_segment_size_ - segment_offset));
+      segment_element_count[segment_it] - (item_per_segment - segment_offset));
     while (num_node_copied > 0) {
-      dest_address -= pma_segment_size_ - segment_element_count[segment_it];
+      dest_address -= item_per_segment - segment_element_count[segment_it];
       segment_it--;
       dest_address -= std::min(num_node_copied, segment_element_count[segment_it]);
       num_node_copied -= std::min(num_node_copied, segment_element_count[segment_it]);
     }
     // final adjustment to make sure the address is not in empty space
-    if (dest_address < (segment_it + 1) * pma_segment_size_ 
+    if (dest_address < (segment_it + 1) * item_per_segment 
       - segment_element_count[segment_it]) {
-      dest_address = segment_it * pma_segment_size_ - 1;
+      dest_address = segment_it * item_per_segment - 1;
     }
   }
   
@@ -653,7 +655,7 @@ uint64_t GetRightMostChildAddress(const NodeEntry* node, uint64_t len,
 
 void vEBTreeBackwardIterator::Prev() {
   if (!valid_) return; // valid_ set false means we are at the first leaf.
-  auto curr_address = curr_->parent_addr;
+  auto curr_address = curr_parent_address_;
   auto curr = tree_->GetNode(curr_address);
   bool checker;
   auto idx = GetChildIdx(vEBTree::get_children(curr), tree_->fanout_,
@@ -666,7 +668,7 @@ void vEBTreeBackwardIterator::Prev() {
       valid_ = false;
       return;
     }
-    curr_address = curr_->parent_addr;
+    curr_address = curr->parent_addr;
     curr = tree_->GetNode(curr_address);
     idx = GetChildIdx(vEBTree::get_children(curr), tree_->fanout_,
       curr_address, &checker);
@@ -687,11 +689,12 @@ void vEBTreeBackwardIterator::Prev() {
   }
   curr_address_ = curr_address;
   curr_ = curr;
+  curr_parent_address_ = curr_->parent_addr;
 }
 
 void vEBTreeForwardIterator::Next() {
   if (!valid_) return; // valid_ set false means we are at the last leaf.
-  auto curr_address = curr_->parent_addr;
+  auto curr_address = curr_parent_address_;
   auto curr = tree_->GetNode(curr_address);
   bool checker;
   auto idx = GetChildIdx(vEBTree::get_children(curr), tree_->fanout_,
@@ -721,6 +724,22 @@ void vEBTreeForwardIterator::Next() {
   }
   curr_address_ = curr_address;
   curr_ = curr;
+  curr_parent_address_ = curr_->parent_addr;
+}
+
+void vEBTree::UpdateLeafKey(uint64_t leaf_address, uint64_t parent_address, uint64_t new_key) {
+  auto curr_address = parent_address;
+  Node* curr;
+  uint64_t idx;
+  do {
+    curr = GetNode(curr_address);
+    bool checker;
+    idx = GetChildIdx(get_children(curr), fanout_, leaf_address, &checker);
+    auto child_entry = get_children(curr) + idx;
+    assert(child_entry->addr = curr_address);
+    child_entry->key = new_key;
+    curr_address = curr->parent_addr;
+  } while (idx==0 && curr->height != root_height_);
 }
 
 }  // namespace cobtree

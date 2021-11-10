@@ -24,6 +24,16 @@ struct Node {
   // NodeEntry* children; 
 };
 
+struct L2Node {
+  uint64_t key;
+  uint64_t l3_segment_id;
+};
+
+struct L3Node {
+  uint64_t key;
+  uint64_t value;
+};
+
 
 // struct Data {
 //   uint64_t cost;

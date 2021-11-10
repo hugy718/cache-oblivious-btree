@@ -5,16 +5,6 @@
 namespace cobtree {
 
 namespace {
-struct L2Node {
-  uint64_t key;
-  uint64_t l3_segment_id;
-};
-
-struct L3Node {
-  uint64_t key;
-  uint64_t value;
-};
-
 struct L2GetReturn {
   uint64_t pos;
   uint64_t l3_segment_id;
@@ -33,14 +23,16 @@ L2GetReturn GetL2Item(uint64_t key, const PMASegment& l2_segment) {
   auto pos = (l2_segment.len / item_size) - 1;
   while (num_element > 0 && item->key < key) {
     last_id = item->l3_segment_id;
-    item -= item_size;
+    item--;
     pos--;
+    num_element--;
   }
-  return {last_id, pos+1};
+  return {pos+1, last_id};
 }
 
 uint64_t GetRecordLocation(uint64_t key, const PMASegment& segment,
-  bool* key_equal = nullptr) {
+  bool* key_equal) {
+  assert(key_equal);
   // by construction we should have l3 segment size being 
   // a multiple of record size.
   auto item_size = sizeof(L3Node);
@@ -51,11 +43,11 @@ uint64_t GetRecordLocation(uint64_t key, const PMASegment& segment,
 
   auto pos = (segment.len / item_size) - 1;
   while (num_element > 0 && item->key < key) {
-    item -= item_size;
+    item--;
     num_element--;
     pos--;
   }
-  if (key_equal) *key_equal = (item->key == key);
+  *key_equal = (item->key == key);
   return pos;
 }
 
@@ -205,7 +197,8 @@ bool CoBtree::L2Update(uint64_t l2_segment_id,
     if(aggregate_ctx.updated_segment.empty()) aggregate_ctx = ctx; // fast path
     if(ctx.updated_segment.empty()) continue; // fast path
     // merge the new context into the aggregate
-    aggregate_ctx.filled_empty_segment = ctx.filled_empty_segment;
+    aggregate_ctx.num_filled_empty_segment 
+      += ctx.num_filled_empty_segment;
     aggregate_ctx.updated_segment = MergeSegmentUpdateInfo(
       aggregate_ctx.updated_segment, ctx.updated_segment);
   }
@@ -215,72 +208,103 @@ bool CoBtree::L2Update(uint64_t l2_segment_id,
   return true;
 }
 
+// note that l1 update is drastically different from l2.
+// l1 leafs are in key ascending order as leaf index increases (l2 item in key descending order). 
 bool CoBtree::L1Update(uint64_t l1_leaf_address, uint64_t l2_insert_segment_id,
   const PMAUpdateContext& l2_update_ctx) {
   auto& l2_updated_segments = l2_update_ctx.updated_segment;
   auto insert_segment_it = l2_updated_segments.begin();
-  while ((insert_segment_it != l2_updated_segments.end())
-    && (l2_insert_segment_id < insert_segment_it->segment_id)){
-    insert_segment_it++;
-  }
-  // must be in the update context by construction
-  assert(insert_segment_it->segment_id == l2_insert_segment_id);
+  if (l2_update_ctx.num_filled_empty_segment == 0) {
+    // no leaf insertion. only update.
+    while ((insert_segment_it != l2_updated_segments.end())
+      && (l2_insert_segment_id < insert_segment_it->segment_id)){
+      insert_segment_it++;
+    }
+    // must be in the update context by construction
+    assert(insert_segment_it->segment_id == l2_insert_segment_id);
 
-  if (insert_segment_it != l2_updated_segments.begin()) {
-    // scan backward to update them 
-    // (excluding the segment that insertion happens)
-    auto l2_segment_it = insert_segment_it;
+    if (insert_segment_it != l2_updated_segments.begin()) {
+      // scan backward to update them 
+      // (excluding the segment that insertion happens)
+      auto l2_segment_it = insert_segment_it;
+      vEBTreeForwardIterator leaf_it(&tree_, l1_leaf_address);
+      do {
+        // move to the previous item in the current l2 segment
+        leaf_it.Next();
+        assert(leaf_it.valid());
+        // move to the previous l3 segment
+        l2_segment_it--;
+        // get the smallest key in the current l3 segment
+        auto curr_l2_segment = pma_index_.Get(l2_segment_it->segment_id);
+        auto curr_l2_first_item = reinterpret_cast<L2Node*>(
+          curr_l2_segment.content + curr_l2_segment.len - sizeof(L2Node)
+        );
+        // update key 
+        // vEBTree::get_children(leaf_it.node())->key = curr_l2_first_item->key;
+        assert(vEBTree::get_children(leaf_it.node())->key
+          == l2_segment_it->segment_id);
+        tree_.UpdateLeafKey(leaf_it.leaf_address(), leaf_it.parent_address(),
+          curr_l2_first_item->key);
+      } while (l2_segment_it != l2_updated_segments.begin());
+    }
+
+    // update l1 leaf pointing to the segment where insertion happen and afterwards
     vEBTreeBackwardIterator leaf_it(&tree_, l1_leaf_address);
-    do {
-      // move to the previous item in the current l2 segment
-      leaf_it.Prev();
-      assert(leaf_it.valid());
-      // move to the previous l3 segment
-      l2_segment_it--;
+    while (insert_segment_it != l2_updated_segments.end()) {
       // get the smallest key in the current l3 segment
-      auto curr_l2_segment = pma_index_.Get(l2_segment_it->segment_id);
+      auto curr_l2_segment = pma_data_.Get(insert_segment_it->segment_id);
       auto curr_l2_first_item = reinterpret_cast<L2Node*>(
         curr_l2_segment.content + curr_l2_segment.len - sizeof(L2Node)
       );
       // update key 
-      vEBTree::get_children(leaf_it.node())->key = curr_l2_first_item->key;
-    } while (l2_segment_it != l2_updated_segments.begin());
+        // vEBTree::get_children(leaf_it.node())->key = curr_l2_first_item->key;
+        assert(vEBTree::get_children(leaf_it.node())->key
+          == insert_segment_it->segment_id);
+        tree_.UpdateLeafKey(leaf_it.leaf_address(), leaf_it.parent_address(),
+          curr_l2_first_item->key);
+      // move to the next l3 segment
+      insert_segment_it++;
+      leaf_it.Prev();
+    }
   }
-
-  // update l1 leaf pointing to the segment where insertion happen and afterwards
-  vEBTreeForwardIterator leaf_it(&tree_, l1_leaf_address);
-  while (insert_segment_it != l2_updated_segments.end()) {
-    // get the smallest key in the current l3 segment
-    auto curr_l2_segment = pma_data_.Get(insert_segment_it->segment_id);
-    auto curr_l2_first_item = reinterpret_cast<L2Node*>(
-      curr_l2_segment.content + curr_l2_segment.len - sizeof(L2Node)
-    );
-    // update key 
-    vEBTree::get_children(leaf_it.node())->key = curr_l2_first_item->key;
-    // move to the next l3 segment
-    insert_segment_it++;
-    leaf_it.Next();
-
-    // check if we have reached the last leaf
-    if (!leaf_it.valid()) break;    
-  }
-
-  // possibly we have new items to be added
-  uint64_t tree_node_size = sizeof(Node) + sizeof(NodeEntry) * tree_.fanout();
-  bool l1_insert_success = false;
-  while (insert_segment_it != l2_updated_segments.end()) {
-    auto curr_l2_segment = pma_data_.Get(insert_segment_it->segment_id);
-    auto curr_l2_first_item = reinterpret_cast<L2Node*>(
-      curr_l2_segment.content + curr_l2_segment.len - sizeof(L2Node)
-    );
-    L2Node curr_l2_first_item_copy{curr_l2_first_item->key, 
-      curr_l2_first_item->l3_segment_id};
-
-    // add the leaf node to van Emde Boas Tree
-    PMAUpdateContext ctx;
-    l1_insert_success = tree_.Insert(curr_l2_first_item_copy.key, 
-      insert_segment_it->segment_id);
-    if (!l1_insert_success) return false; // l1 pma no space
+  else {
+    // with new segement the logic is different;
+    // we know new segment insertion in level 2 happens at the tail end.
+    // so the leaf nodes from low key to high key needs to be updated,
+    // leaving exactly number of filled empty segments with higher key 
+    // in the update context for vebtree node insertion.
+    auto segment_it = l2_update_ctx.updated_segment.rbegin();
+    auto num_leaf_update = l2_update_ctx.num_filled_empty_segment;
+    // obtain the first leaf address
+    uint64_t first_leaf_address;
+    tree_.Get(0, &first_leaf_address);
+    vEBTreeForwardIterator leaf_it(&tree_, first_leaf_address);
+    do {
+      auto curr_l2_segment = pma_data_.Get(insert_segment_it->segment_id);
+      auto curr_l2_first_item = reinterpret_cast<L2Node*>(
+        curr_l2_segment.content + curr_l2_segment.len - sizeof(L2Node)
+      );
+      tree_.UpdateLeafKey(leaf_it.leaf_address(), leaf_it.parent_address(), 
+        curr_l2_first_item->key);
+      segment_it++;
+    } while (--first_leaf_address > 0);
+    while(segment_it != l2_update_ctx.updated_segment.rend()) {
+      // possibly we have new items to be added
+      uint64_t tree_node_size = sizeof(Node) + sizeof(NodeEntry) 
+        * tree_.fanout();
+      bool l1_insert_success = false;
+      auto curr_l2_segment = pma_data_.Get(insert_segment_it->segment_id);
+      auto curr_l2_first_item = reinterpret_cast<L2Node*>(
+        curr_l2_segment.content + curr_l2_segment.len - sizeof(L2Node)
+      );
+      L2Node curr_l2_first_item_copy{curr_l2_first_item->key, 
+        curr_l2_first_item->l3_segment_id};
+      // add the leaf node to van Emde Boas Tree
+      PMAUpdateContext ctx;
+      l1_insert_success = tree_.Insert(curr_l2_first_item_copy.key, 
+        insert_segment_it->segment_id);
+      if (!l1_insert_success) return false; // l1 pma no space
+    }
   }
   return true;
 }
@@ -294,7 +318,7 @@ bool CoBtree::Insert(uint64_t key, uint64_t value) {
   auto l3_segment = pma_data_.Get(l3_segment_id);
   bool key_equal = false;
   auto pos = GetRecordLocation(key, l3_segment, &key_equal);
-  if (key_equal) {
+  if (key_equal == true) {
     // fast path perfrom update
     UpdateRecord(key, value, pos, &l3_segment);
     return true;

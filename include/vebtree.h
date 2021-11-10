@@ -19,24 +19,25 @@ class vEBTreeBackwardIterator;
 class vEBTree {
  public:
   vEBTree() = delete;
-  vEBTree(uint64_t fanout, uint64_t estimated_unit_count, uint64_t pma_redundancy_factor, 
+  vEBTree(uint64_t fanout, uint64_t estimated_unit_count, double pma_redundancy_factor, 
     const std::string& uid, const PMADensityOption& pma_options, Cache* cache)
     : fanout_(fanout), node_size_(sizeof(Node) + sizeof(NodeEntry) * fanout_),
       root_height_(2), // one leaf and one root will be created
-      pma_(uid, node_size_, estimated_unit_count * pma_redundancy_factor, pma_options, cache),
-      pma_segment_size_(pma_.segment_size()),
-      root_address_(pma_segment_size_-1), // the initial root is at the end of the first segment
-      segment_element_count(pma_segment_size_, 0) {
-      assert(pma_segment_size_ > 10); // a segment needs to be reasonably large
+      pma_(uid, node_size_, std::ceil(estimated_unit_count 
+        * pma_redundancy_factor), pma_options, cache),
+      item_per_segment(pma_.segment_size()),
+      root_address_(item_per_segment - 1), // the initial root is at the end of the first segment
+      segment_element_count(pma_.segment_count(), 0) {
+      assert(pma_.segment_size() > 10); // a segment needs to be reasonably large
       // create the fist leaf
       std::unique_ptr<char[]> first_leaf_buffer{ new char[node_size_] };
       std::memset(first_leaf_buffer.get(), -1, node_size_);
       Node* first_leaf = reinterpret_cast<Node*>(first_leaf_buffer.get());
       first_leaf->parent_addr = root_address_;
       first_leaf->height = 1;
-      get_children(first_leaf)->key = 0; // points to the first segment in 2nd level PMA.
+      // get_children(first_leaf)->key = 0; // points to the first segment in 2nd level PMA.
       auto segment = pma_.Get(0);
-      std::memcpy((segment.content + pma_segment_size_ - 2 * node_size_),
+      std::memcpy((segment.content + (item_per_segment - 2) * node_size_),
         first_leaf_buffer.get(), node_size_);
 
       // create the root
@@ -46,9 +47,11 @@ class vEBTree {
       first_root->height = 2;
       auto child = get_children(first_root);
       child->key = 0; // in out fixed key range of uint64_t 0 is the smallest key.
-      child->addr = pma_segment_size_ - 2;
-      std::memcpy((segment.content + pma_segment_size_ - node_size_),
+      child->addr = item_per_segment - 2;
+      std::memcpy((segment.content + (item_per_segment - 1) * node_size_),
         first_root_buffer.get(), node_size_);
+      auto test_node = GetNode(12);
+      auto test_child = get_children(test_node);
     }
 
   /**
@@ -66,9 +69,13 @@ class vEBTree {
   Node* GetNode(uint64_t address);
  
   bool Insert(uint64_t key, uint64_t value);
+
+  // potentially update its predecessors' keys;
+  void UpdateLeafKey(uint64_t leaf_address, uint64_t parent_address,
+    uint64_t new_key);
   
   static NodeEntry* get_children(Node* node) {
-    return reinterpret_cast<NodeEntry*>(node + sizeof(Node));
+    return reinterpret_cast<NodeEntry*>(node + 1);
   }
 
   inline uint64_t fanout() const { return fanout_; }
@@ -122,7 +129,7 @@ class vEBTree {
 
 
   inline const NodeEntry* get_children(const Node* node) const {
-    return reinterpret_cast<const NodeEntry*>(node + sizeof(Node));
+    return reinterpret_cast<const NodeEntry*>(node + 1);
   }
 
   // this essentially move the node stored immediately before this node.
@@ -144,10 +151,9 @@ class vEBTree {
       *is_leaf = true;
       return child->key;
     }
-    for (auto it  = child; it < child + fanout_; it++) {
+    for (auto it = child; it < child + fanout_; it++) {
       // next children has larger key or no more nodes
       if ((it->key > key) || (it->addr == UINT64_MAX)) return (--it)->addr;
-      it++;
     }
     // return the last child address
     return (child + fanout_ - 1)->addr;
@@ -158,7 +164,7 @@ class vEBTree {
   uint64_t node_size_; // 4d * (address size + key size) + address size )
   uint64_t root_height_; // the height of root node in pma.
   PMA pma_;
-  uint64_t pma_segment_size_; // cached pma segment size
+  uint64_t item_per_segment; // cached pma segment size, in #item
   uint64_t root_address_; // the position of root node in pma.
 
   // the segment_element_count can be stored at the leading space in a segment
@@ -171,7 +177,8 @@ class vEBTreeBackwardIterator {
  public:
   vEBTreeBackwardIterator(vEBTree* tree, uint64_t leaf_address)
     : valid_(true), curr_address_(leaf_address), tree_(tree), 
-    curr_(tree_->GetNode(leaf_address)) {}
+    curr_(tree_->GetNode(leaf_address)),
+    curr_parent_address_(curr_->parent_addr) {}
   
   bool valid() const { return valid_ && (curr_->height == 1); }
 
@@ -181,18 +188,24 @@ class vEBTreeBackwardIterator {
   // check valid() first
   Node* node() { return curr_; }
 
+  uint64_t parent_address() const { return curr_parent_address_; }
+
+  uint64_t leaf_address() const { return curr_address_; }
+
  private:
   bool valid_;
   uint64_t curr_address_;
   vEBTree* tree_;
   Node* curr_;
+  uint64_t curr_parent_address_;
 };
 
 class vEBTreeForwardIterator {
  public:
   vEBTreeForwardIterator(vEBTree* tree, uint64_t leaf_address)
     : valid_(true), curr_address_(leaf_address), tree_(tree), 
-    curr_(tree_->GetNode(leaf_address)) {}
+    curr_(tree_->GetNode(leaf_address)),
+    curr_parent_address_(curr_->parent_addr) {}
   
   bool valid() const { return valid_ && (curr_->height == 1); }
 
@@ -202,11 +215,16 @@ class vEBTreeForwardIterator {
   // check valid() first
   Node* node() { return curr_; }
 
+  uint64_t parent_address() const { return curr_parent_address_; }
+  
+  uint64_t leaf_address() const { return curr_address_; }
+
  private:
   bool valid_;
   uint64_t curr_address_;
   vEBTree* tree_;
   Node* curr_;
+  uint64_t curr_parent_address_;
 };
 
 }  // namespace cobtree

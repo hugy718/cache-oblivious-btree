@@ -22,9 +22,11 @@ class BlockDevice {
     : block_size_(block_size),
     buffer_size_(AdjustForBlockSize(block_size, size)),
     buffer_(new char[buffer_size_]) {}
+
+  ~BlockDevice() = default;
   
   // return the number of bytes read
-  uint64_t Read(uint64_t offset, uint64_t len, char* ret);
+  uint64_t Read(uint64_t offset, uint64_t len, char** ret);
   
   void Write(const char* data, uint64_t offset, uint64_t len);
 
@@ -39,7 +41,7 @@ class BlockDevice {
   const uint64_t block_size_;
   // std::set<uint64_t> in_memory_;
   const uint64_t buffer_size_;
-  std::unique_ptr<char> buffer_;
+  std::unique_ptr<char[]> buffer_;
 };
 
 }  // namespace cobtree

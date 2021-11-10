@@ -29,7 +29,7 @@ struct SegmentInfo {
 struct PMAUpdateContext {
 
   inline void clear() {
-    filled_empty_segment = false;
+    num_filled_empty_segment = 0;
     // global_rebalance = false;
     updated_segment.clear();
   }
@@ -37,13 +37,13 @@ struct PMAUpdateContext {
   // copy assignment operator
   PMAUpdateContext& operator=(const PMAUpdateContext& other){
     if (this != &other) {
-      filled_empty_segment = other.filled_empty_segment;
+      num_filled_empty_segment = other.num_filled_empty_segment;
       updated_segment = other.updated_segment;
     }
     return *this;
   }
 
-  bool filled_empty_segment = false; // when pma slowly grows the segment is filled one by one gradually. Exposing this information helps to index update.
+  uint64_t num_filled_empty_segment = 0; // when pma slowly grows the segment is filled one by one gradually. Exposing this information helps to index update.
   // bool global_rebalance = false; // true when the whole array is reallocated
   std::vector<SegmentInfo> updated_segment; // updated segment.
 };
@@ -57,6 +57,7 @@ struct PMADensityOption {
 
 class PMA {
  public:
+  PMA() = delete;
   PMA(const std::string& id, uint64_t item_size, uint64_t estimated_item_count, 
     const PMADensityOption& option, Cache* cache)
     : id_(id), item_size_(item_size), 
@@ -71,9 +72,11 @@ class PMA {
       assert(segment_count_ * segment_size_ > estimated_item_count);
 #ifndef NDEBUG
     printf("Debug print: The PMA contains %lu segment, each size of %lu. \
-      each item has size %lu", segment_count_, segment_size_, item_size_);
+      each item has size %lu\n", segment_count_, segment_size_, item_size_);
 #endif // NDEBUG
   }
+
+  ~PMA() = default;
 
   static std::string CreatePMACacheKey(const std::string& id, uint64_t segment_id) {
     return id + std::to_string(segment_id);
@@ -100,7 +103,7 @@ class PMA {
 
   inline double UpperDensityThreshold(int height) {
     return option_.upper_density_base_lower + (option_.upper_density_base_upper 
-      - option_.upper_density_base_lower) * depth(height) / (height-1);  
+      - option_.upper_density_base_lower) * depth(height) / (height_ - 1);  
   }
 
   inline double LowerDensityThreshold(int heihgt) { /*not implemented*/ return 0.0;}
@@ -119,17 +122,17 @@ class PMA {
   // return the logical height we are at
   inline void expand_rebalance_range(uint64_t* left, uint64_t* right, 
     uint64_t* item_count) const {
-    auto num_segment = right - left + 1; // number of segment we have, also the number we need to add to the range
+    auto num_segment = (*right) - (*left) + 1; // number of segment we have, also the number we need to add to the range
     while (num_segment > 0) {
-      if (right - left + 1 == segment_count_) break;
+      if ((*right) - (*left) + 1 == segment_count_) break;
       if (*left > 0) {
-        *left--;
-        *item_count += item_count_[*left];
+        (*left)--;
+        (*item_count) += item_count_[*left];
         num_segment--;
       }
       if (*right < segment_count_-1) {
-        *right++;
-        *item_count += item_count_[*right];
+        (*right)++;
+        (*item_count) += item_count_[*right];
         num_segment--;
       }
     }
