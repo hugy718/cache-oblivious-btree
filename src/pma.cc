@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <queue>
 
 namespace cobtree {
 
@@ -18,6 +19,17 @@ PMASegment PMA::Get(uint64_t segment_id) const {
     cache_->Add(cache_key, ptr, read_len);
   }
   return PMASegment{ptr, segment_size_ * item_size_, item_count_[segment_id]};
+}
+
+PMASegmentCopy PMA::GetCopy(uint64_t segment_id) const {
+  auto segment = Get(segment_id);
+  PMASegmentCopy cpy;
+  cpy.segment_id = segment_id;
+  cpy.len = segment.len;
+  cpy.content.reset(new char[cpy.len]);
+  std::memcpy(cpy.content.get(), segment.content, cpy.len);
+  cpy.num_item = segment.num_item;
+  return cpy;
 }
 
 bool PMA::Add(const char *item, uint64_t segment_id, uint64_t pos, PMAUpdateContext *ctx) {
@@ -123,6 +135,8 @@ void PMA::RebalanceRange(uint64_t left, uint64_t right, uint64_t item_count,
   // }
   auto curr_item_to_copy = redistribution_ctx.get_target_item(right);
   auto num_item_left = item_count;
+  // when dest is smaller than src, it copy the content and push it here. later src will read from the unmodified old state of segment.
+  std::queue<PMASegmentCopy> src_cpy;
   while (num_item_left > 0) {
     auto src_segment_left = src_offset - (segment_size_ - src_segment_item_count) + 1;
     auto actual_copy_count = std::min(curr_item_to_copy,  src_segment_left);
@@ -180,8 +194,18 @@ void PMA::RebalanceRange(uint64_t left, uint64_t right, uint64_t item_count,
     if ((actual_copy_count == src_segment_left)
       && (src_segment_id != left)) {
       // we have depleted the current source
+      // clear our segment copy from queue, if we used it
+      if (!src_cpy.empty() && src_cpy.front().segment_id == src_segment_id) {
+        src_cpy.pop();
+      }
       src_segment_id--;
-      src_segment = Get(src_segment_id).content;
+      if (!src_cpy.empty()) {
+        assert(src_segment_id == src_cpy.front().segment_id);
+        src_segment = src_cpy.front().content.get();
+      } else {
+        src_segment = Get(src_segment_id).content;
+      }
+      // check if we should read from segment copy.
       src_offset = segment_size_ - 1; 
       src_segment_item_count = item_count_[src_segment_id];
       // { 
@@ -208,6 +232,10 @@ void PMA::RebalanceRange(uint64_t left, uint64_t right, uint64_t item_count,
       &&(dest_segment_id != left)) {
       // we have filled the current destination
       dest_segment_id--;
+      if (dest_segment_id < src_segment_id) {
+        // we are modifying segments that would be sources later;
+        src_cpy.push(GetCopy(dest_segment_id));
+      }
       // { 
       //     // printed dest segment content as uint64_t.
       //     auto pitr = reinterpret_cast<uint64_t*>(dest_segment + (segment_size_) * item_size_ 

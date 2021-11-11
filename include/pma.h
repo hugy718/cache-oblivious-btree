@@ -17,6 +17,13 @@ struct PMASegment {
   uint64_t num_item;
 };
 
+struct PMASegmentCopy {
+  uint64_t segment_id;
+  std::unique_ptr<char[]> content;
+  uint64_t len;
+  uint64_t num_item;
+};
+
 struct SegmentInfo {
   SegmentInfo() = delete;
   SegmentInfo(uint64_t _segment_id, uint64_t _num_count)
@@ -84,6 +91,8 @@ class PMA {
 
   // the user will obtain the segment and perform get logic and additional rebalance (example vEBtree node rearrage).
   PMASegment Get(uint64_t segment_id) const;
+
+  PMASegmentCopy GetCopy(uint64_t segment_id) const;
 
   // This when rewrite the segment will put the item at pos.
   // needed for
