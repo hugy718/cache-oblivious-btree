@@ -1,6 +1,7 @@
 #include "vebtree.h"
 
 #include <cassert>
+#include <iostream>
 #include <stack>
 
 namespace cobtree {
@@ -13,20 +14,28 @@ namespace cobtree {
  * @param pma_address address in the PMA where vEB Tree is stored
  * @return uint64_t leaf value
  */
-uint64_t vEBTree::Get(uint64_t key, uint64_t* pma_address) {
-  bool is_leaf = false;
-  // obtain the root node and the address of the target child
-  auto last_address = root_address_;
-  auto address = child_to_search(GetNode(root_address_), key, &is_leaf);
-  // need to traverse down the tree
-  while(!is_leaf) {
-    auto node = GetNode(address); 
-    last_address = address;
-    address = child_to_search(node, key, &is_leaf);
-    if (is_leaf) break;
+uint64_t vEBTree::Get(uint64_t key, uint64_t* pma_address, bool* match_key) {
+  // bool is_leaf = false;
+  // // obtain the root node and the address of the target child
+  // auto last_address = root_address_;
+  // auto address = child_to_search(GetNode(root_address_), key, &is_leaf);
+  // // need to traverse down the tree
+  // while(!is_leaf) {
+  //   auto node = GetNode(address); 
+  //   last_address = address;
+  //   address = child_to_search(node, key, &is_leaf);
+  //   if (is_leaf) break;
+  // }
+  // *pma_address = last_address;
+  // return address;
+  auto address = root_address_;
+  auto node = GetNode(address);
+  while (node->height != 1) {
+    address = child_to_search(node, key, match_key);
+    node = GetNode(address);
   }
-  *pma_address = last_address;
-  return address;
+  *pma_address = address;
+  return get_children(node)->key;
 }
 
 Node* vEBTree::GetNode(uint64_t address) {
@@ -40,31 +49,37 @@ Node* vEBTree::GetNode(uint64_t address) {
 
 // Insert in our simulated use case of growing vEBTree, only insert at the tail end, after rebalance fill up new segemnts.
 bool vEBTree::Insert(uint64_t key, uint64_t value) {
+  // find the parent that we should add this child to
+  bool match_key = false;
+  // obtain the root node
+  auto node = GetNode(root_address_);
+  auto address = root_address_;
+
+  // need to traverse down the tree until we are at the leaf.
+  while(node->height != 1) {
+    address = child_to_search(node, key, &match_key);
+    node = GetNode(address);
+  }
+
+  // if the leaf with the same key exists, fast path to update it.
+  if (match_key) {
+    get_children(node)->key = value;
+    return true;
+  }
+  // node insertion needed
   // create a new leaf node
   std::unique_ptr<char[]> buffer(new char[node_size_]);
   std::memset(buffer.get(), -1, node_size_);
   Node* new_leaf = reinterpret_cast<Node*>(buffer.get());
   new_leaf->height = 1;
+  new_leaf->parent_addr = node->parent_addr;
+  get_children(new_leaf)->key = value;
   
-  // find the parent that we should add this child to
-  bool is_leaf = false;
-  // obtain the root node
-  auto node = GetNode(root_address_);
-  auto address = child_to_search(node, key, &is_leaf);
-
-  // need to traverse down the tree
-  auto last_address = root_address_; // store parent address to avoid backtrack.
-  while(node->height) {
-    node = GetNode(address);
-    last_address = address;
-    address = child_to_search(node, key, &is_leaf);
-  }
-
-  new_leaf->parent_addr = last_address;
-  assert(address % item_per_segment != 0);
   uint64_t landed_address;
   PMAUpdateContext ctx;
   bool success;
+  // minus 1 here because leaf are packed closely in van Emde Boas layout.
+  // the new leaf should follow immediately after the search leaf.
   auto root_moved = AddNodeToPMA(new_leaf, address-1, &landed_address, 
     &ctx, &success);
   if (!success) return false; // pma no space.
@@ -263,18 +278,31 @@ void vEBTree::InsertSubtree(const TreeCopy& tree, uint64_t new_address) {
 namespace {
 // helper class to adjust pointer in after a rebalance
 // Note that rebalance only changes elements address and does not change the order among the elements.
+// Note the insert_address is the intended insertion address not the landed address after rebalance.
+// There may be hidden memory transfer cost hidden here. As the context for rebalancing take space 
+// O(N/log^2{N}) which may not fit in cache layer.
 struct RebalancePointerAdjustementCtx{
-  RebalancePointerAdjustementCtx(const PMAUpdateContext& ctx, const std::vector<uint64_t>& old_element_count, uint64_t _segment_size) 
-    : segment_size(segment_size) {
-    for (auto s : ctx.updated_segment) {
-      segment_ctx.emplace_back(s.segment_id, 
-        old_element_count[s.segment_id], s.num_count);
-    }
+  RebalancePointerAdjustementCtx(const PMAUpdateContext& ctx, const std::vector<uint64_t>& old_element_count, uint64_t _segment_size, uint64_t _insert_address) 
+    : segment_size(_segment_size), insert_address(_insert_address),
+    insert_segment(insert_address/segment_size) {
+    // if (ctx.updated_segment.empty()) {
+    //   // only the segment where insertion happen 
+    //   auto num_count = old_element_count[insert_segment];
+    //   // the one is already added
+    //   segment_ctx.emplace_back(insert_segment, num_count, num_count);
+    // } else {
+      for (auto s : ctx.updated_segment) {
+        segment_ctx.emplace_back(s.segment_id, 
+          old_element_count[s.segment_id], s.num_count);
+      }
+    // }
   }
 
   // given an address that is before rebalance and return the address after rebalance.
   // return whether the address updated within the updating range.
-   bool AdjustAddress(uint64_t address, uint64_t* ret) const {
+  // The last argument is that when we calculate the address of inserted element.
+  //  setting it true helps us to distinguish against the old item at that place.
+   bool AdjustAddress(uint64_t address, uint64_t* ret, bool is_insert_address = false) const {
     // fast path for pointer to element ouside the rebalanced segments.
     if ((address < segment_ctx.front().segment_id*segment_size)
       || (address > (segment_ctx.back().segment_id+1)*segment_size)) {
@@ -282,26 +310,32 @@ struct RebalancePointerAdjustementCtx{
     }
 
     assert(ret);
+    // if the address fall in the segment for insertion and <= insert address
+    // needs special adjustment (-1 when calculating )
+    bool in_insert_segment_before_insert = (!is_insert_address) 
+      && (address/segment_size == insert_segment) 
+      && (address <= insert_address);
     // calculate compact address: the address if set the first position of the old segments as 0 and remove all empty spaces in between.
+    // all nodes needs to shift for the empty space in the first rebalancing segment.
     auto compact_address = address
-      - segment_ctx.front().segment_id*segment_size;
-    auto temp {0};
+      - segment_ctx.front().segment_id*segment_size -
+      - ((in_insert_segment_before_insert) ? 1 : 0);
+    auto curr_segment_id = 0; // offset from the first rebalance segment
     auto segment_it = segment_ctx.begin();
-    while(address > temp) {
-      compact_address -= temp + (segment_size - segment_it->old_count);
-      temp += segment_it->old_count;
+    while(address >= (curr_segment_id * segment_size)) {
+      compact_address -= (segment_size - segment_it->old_count);
       segment_it++;
+      curr_segment_id++;
     }
 
     // calculate new address, basically we need to add those empty spaces
-    auto new_address = compact_address
-      + segment_ctx.front().segment_id*segment_size;
-    temp = 0;
+    auto new_address = compact_address;
+    curr_segment_id = 0;
     segment_it = segment_ctx.begin();
-    while(compact_address > temp) {
-      temp += segment_it->new_count; 
+    while(compact_address >= (curr_segment_id*segment_size)) {
       new_address += (segment_size - segment_it->new_count);
       segment_it++;
+      curr_segment_id++;
     }
     *ret = new_address;
     return true;
@@ -317,24 +351,29 @@ struct RebalancePointerAdjustementCtx{
     // calculate compact address: the address if set the first position of the old segments as 0 and remove all empty spaces in between.
     auto compact_address = address
       - segment_ctx.front().segment_id*segment_size;
-    auto temp {0};
+    auto curr_segment_id {0}; // offset from the first rebalance segment
     auto segment_it = segment_ctx.begin();
-    while(address > temp) {
-      compact_address -= temp + (segment_size - segment_it->new_count);
-      temp += segment_it->new_count;
+    while(address > (curr_segment_id * segment_size)) {
+      compact_address -= (segment_size - segment_it->new_count);
       segment_it++;
+      curr_segment_id++;
     }
 
     // calculate new address, basically we need to add those empty spaces
-    auto old_address = compact_address
-      + segment_ctx.front().segment_id*segment_size;
-    temp = 0;
+    auto old_address = compact_address;
+    curr_segment_id = 0;
     segment_it = segment_ctx.begin();
-    while(compact_address > temp) {
-      temp += segment_it->old_count; 
+    while(compact_address >= (curr_segment_id*curr_segment_id)) {
       old_address += (segment_size - segment_it->old_count);
       segment_it++;
+      curr_segment_id++;
     }
+
+    // additional adjustment needed for original address that is in front of the insert address
+    bool in_insert_segment_before_insert = (old_address/segment_size == insert_segment) 
+    && (old_address < insert_address);
+    if (in_insert_segment_before_insert) old_address++;
+
     return old_address;
   }
 
@@ -347,6 +386,8 @@ struct RebalancePointerAdjustementCtx{
   };
 
   uint64_t segment_size;
+  uint64_t insert_address;
+  uint64_t insert_segment;
   std::vector<CountChange> segment_ctx;
 };
 }  // anonymous namespace
@@ -363,12 +404,20 @@ bool vEBTree::AddNodeToPMA(const Node* node, uint64_t address,
   *success = pma_.Add(reinterpret_cast<const char*>(node), segment_id, 
     segment_offset, ctx);
 
-  // update the count before rebalance.
+  // update the count before address adjustment.
   segment_element_count[segment_id]++;
+
+  // PMA will not return the insert segment in the ctx 
+  // while for vEBTree we need to update address inside it
+  // so we manually add it to ctx.
+  if (ctx->updated_segment.empty()) {
+    ctx->num_filled_empty_segment = 0;
+    ctx->updated_segment.emplace_back(segment_id, segment_element_count[segment_id]);
+  } 
 
   // update addresses
   RebalancePointerAdjustementCtx address_adjust{*ctx, 
-    segment_element_count, item_per_segment};
+    segment_element_count, item_per_segment, address};
   for (auto s : ctx->updated_segment) {
     auto segment = pma_.Get(s.segment_id); 
     auto node_it = reinterpret_cast<Node*>(segment.content 
@@ -376,8 +425,8 @@ bool vEBTree::AddNodeToPMA(const Node* node, uint64_t address,
     auto num_elements = s.num_count;
     auto cur_address = (s.segment_id+1) * item_per_segment - 1;
     while (num_elements > 0) {
-      if (!address_adjust.AdjustAddress(node_it->parent_addr,
-        &(node_it->parent_addr))) {
+      if ((node_it->parent_addr != UINT64_MAX) && (!address_adjust.AdjustAddress(
+        node_it->parent_addr, &(node_it->parent_addr)))) {
       // the parenet node is outside our updating ranges. we need to explicitly find it and update.
         auto old_address = address_adjust.RevertAddress(cur_address);
         auto parent_node = GetNode(node_it->parent_addr);
@@ -390,13 +439,17 @@ bool vEBTree::AddNodeToPMA(const Node* node, uint64_t address,
         }
         assert(test_finished); // just a check.
       }
-
-      for (auto child = get_children(node_it); 
-        child < get_children(node_it) + fanout_; child++) {              
-        if (!address_adjust.AdjustAddress(child->addr, &(child->addr))) {
-          // similar to above, if children outside the updating range we need to explicitly find it and update its parent pointer 
-          auto child_node = GetNode(child->addr);
-          child_node->parent_addr = cur_address;
+      // for non-leaf node update children address
+      if (node_it->height != 1) {
+        for (auto child = get_children(node_it); 
+          child < get_children(node_it) + fanout_; child++) {            
+          // fast path, if we reach an empty child pointer
+          if (child->addr == UINT64_MAX) break; 
+          if (!address_adjust.AdjustAddress(child->addr, &(child->addr))) {
+            // similar to above, if children outside the updating range we need to explicitly find it and update its parent pointer 
+            auto child_node = GetNode(child->addr);
+            child_node->parent_addr = cur_address;
+          }
         }
       }
       node_it = get_next_node_in_segment(node_it);
@@ -406,9 +459,9 @@ bool vEBTree::AddNodeToPMA(const Node* node, uint64_t address,
   }
 
   // we simply adjust the inserted address
-  address_adjust.AdjustAddress(address, landed_address);
-  // if the old count of the last segment in the updating region is 0, we grow into a new segment, so the root is moved to a new segment.
-  return address_adjust.segment_ctx.back().old_count == 0; 
+  address_adjust.AdjustAddress(address, landed_address, true);
+  // return if we expand into new segment. if so, need to adjust the root address.
+  return ctx->num_filled_empty_segment != 0; 
 }
 
 // this function only add the entry under the parent node. 
@@ -429,7 +482,7 @@ bool vEBTree::AddChildToNode(uint64_t node_address, uint64_t child_address, uint
     break;
   }
   assert(done);
-  return (child_count == fanout_) ? NodeSplit(node, node->height) : true;
+  return (child_count == fanout_-1) ? NodeSplit(node, node->height) : true;
 }
 
 // leaf node height = 1.
@@ -740,6 +793,83 @@ void vEBTree::UpdateLeafKey(uint64_t leaf_address, uint64_t parent_address, uint
     child_entry->key = new_key;
     curr_address = curr->parent_addr;
   } while (idx==0 && curr->height != root_height_);
+}
+
+void vEBTree::DebugPrintNode(const Node* node) const {
+  // print the node header infomation
+  std::cout << " (height " << ((node->height != UINT64_MAX)
+    ? std::to_string(node->height) : "null"); 
+  std::cout << " parent addr: " << ((node->parent_addr != UINT64_MAX)
+    ? std::to_string(node->parent_addr) : "null");
+  std::cout << " children: ";
+  // print children information
+  auto child = get_children(node);
+  for (auto i = 0; i < fanout_; i++) {
+    std::cout << " key: " << ((child->key !=UINT64_MAX) 
+      ? std::to_string(child->key) : "null");
+    std::cout << " addr: " << ((child->addr !=UINT64_MAX) 
+      ? std::to_string(child->addr) : "null");
+    child ++;
+  }
+  std::cout << ")\n";
+}
+
+void vEBTree::DebugPrintAsPMA() const {
+  for (uint64_t segment_id = 0; segment_id < pma_.segment_count(); segment_id++) {
+    // all segments after this are empty
+    auto num_nodes = segment_element_count[segment_id];
+    if (num_nodes == 0) break;
+    auto segment = pma_.Get(segment_id);
+    auto node = reinterpret_cast<Node*>(segment.content 
+      + (item_per_segment - num_nodes) * node_size_);
+    auto node_end = reinterpret_cast<Node*>(segment.content 
+      + item_per_segment * node_size_);
+    // for printing corresponding address in pma
+    auto addr = (segment_id+1) * item_per_segment - num_nodes;
+    while (node != node_end) {
+      // print the pma address
+      std::cout<< "PMA address: " << addr;
+      addr++;
+      // move to the next node in the pma segment
+      node = reinterpret_cast<Node*>(
+        reinterpret_cast<char*>(node) + node_size_
+      );
+      DebugPrintNode(node);
+    }
+  }
+}
+
+void vEBTree::DebugPrintDFS() {
+  std::stack<uint64_t> dfs_idx_stack;
+  dfs_idx_stack.push(0);
+  auto node = GetNode(root_address_);
+  auto curr_idx = 0;
+  auto curr_address = root_address_;
+  std::cout << "PMA address: " << curr_address;
+  DebugPrintNode(node);
+  while (!dfs_idx_stack.empty()) {
+    if ((curr_idx >= fanout_) || (node->height == 1)) {
+      curr_address = node->parent_addr;
+      if(curr_address == UINT64_MAX) { break; /*root finished*/}
+      node = GetNode(curr_address);
+      curr_idx = dfs_idx_stack.top() + 1;
+      dfs_idx_stack.pop();
+      if (curr_idx != fanout_) dfs_idx_stack.push(curr_idx);
+    } else {
+      curr_address = (get_children(node)+curr_idx)->addr;
+      if (curr_address == UINT64_MAX) {
+        curr_idx = fanout_;
+        continue;
+      }
+      node = GetNode(curr_address);
+      auto padding = std::string(dfs_idx_stack.size(), ' ');
+      std::cout << padding << "PMA address: " << curr_address;
+      DebugPrintNode(node);
+      if (node->height == 1) continue;
+      curr_idx = 0;
+      dfs_idx_stack.push(curr_idx);
+    }
+  }
 }
 
 }  // namespace cobtree

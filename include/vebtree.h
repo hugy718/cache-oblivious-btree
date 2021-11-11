@@ -35,7 +35,7 @@ class vEBTree {
       Node* first_leaf = reinterpret_cast<Node*>(first_leaf_buffer.get());
       first_leaf->parent_addr = root_address_;
       first_leaf->height = 1;
-      // get_children(first_leaf)->key = 0; // points to the first segment in 2nd level PMA.
+      get_children(first_leaf)->key = 0;
       auto segment = pma_.Get(0);
       std::memcpy((segment.content + (item_per_segment - 2) * node_size_),
         first_leaf_buffer.get(), node_size_);
@@ -50,21 +50,27 @@ class vEBTree {
       child->addr = item_per_segment - 2;
       std::memcpy((segment.content + (item_per_segment - 1) * node_size_),
         first_root_buffer.get(), node_size_);
-      auto test_node = GetNode(12);
-      auto test_child = get_children(test_node);
+      
+      // set the first segment item count to 2;
+      segment_element_count[0] = 2;
     }
 
   /**
-   * @brief perfrom get in van Emde Boas layout tree. The value returned is 
-   *  from the leaf value that has the largest key smaller than the lookup key.
+   * @brief perfrom get in van Emde Boas layout tree. The value returned 
+   *  is from the leaf value that has the largest key smaller than the 
+   *  lookup key.
    * 
    * @param key search key 
    * @param pma_address address in the PMA where vEB Tree is stored
+   * @param match_key if the value returned from a leaf node 
+   *  with matching key
    * @return uint64_t leaf value
    */
-  uint64_t Get(uint64_t key, uint64_t* pma_address);
+  uint64_t Get(uint64_t key, uint64_t* pma_address, 
+    bool* match_key = nullptr);
 
-  // first level PMA rebalance can trigger update on the nodes key and its parents separator keys.
+  // first level PMA rebalance can trigger update on the nodes key 
+  //  and its parents separator keys.
   // an API to return the node is helpful.
   Node* GetNode(uint64_t address);
  
@@ -79,6 +85,19 @@ class vEBTree {
   }
 
   inline uint64_t fanout() const { return fanout_; }
+
+  void DebugPrintNode(const Node* it) const;
+  /**
+   * @brief print out the veb tree in the pma layout order to the terminal.
+   * 
+   */
+  void DebugPrintAsPMA() const;
+  
+  /**
+   * @brief print out the veb tree in DFS order to the terminal.
+   * 
+   */
+  void DebugPrintDFS();
 
  private:
   friend vEBTreeForwardIterator;
@@ -140,23 +159,28 @@ class vEBTree {
 
   // check whether all node entries are full.
   inline bool children_exceeds_threshold(const Node* node) const {
-    return (get_children(node)+fanout_-1)->addr != UINT16_MAX;
+    return (get_children(node)+fanout_-1)->addr != UINT64_MAX;
   }
 
-  inline uint64_t child_to_search(const Node* node, uint64_t key, bool* is_leaf) {
+  inline uint64_t child_to_search(const Node* node, uint64_t key, bool* match_key = nullptr) {
+    // we should not call child_to_search on leaf nodes
+    assert(node->height != 1);
+
     auto child = get_children(node);
-    if (child->addr == UINT64_MAX) {
-      // leaf node has no children and the first key in children buffer is set to value.
-      // mark is_leaf as true
-      *is_leaf = true;
-      return child->key;
-    }
-    for (auto it = child; it < child + fanout_; it++) {
+    // other than leaf, all nodes should have at least on child by construction.s
+    assert(child->addr != UINT64_MAX);
+    // the first child should have a smaller than or equal to the search key
+    // by logic of search.s
+    assert(child->key <= key);
+    auto it = child;
+    for (; it < child + fanout_; it++) {
       // next children has larger key or no more nodes
-      if ((it->key > key) || (it->addr == UINT64_MAX)) return (--it)->addr;
+      if ((it->key > key) || (it->addr == UINT64_MAX)) break;
     }
-    // return the last child address
-    return (child + fanout_ - 1)->addr;
+    // return the child key and address
+    it--;
+    if (match_key) (*match_key) = (key == it->key);
+    return it->addr;
   }
 
   uint64_t fanout_; // 4d
