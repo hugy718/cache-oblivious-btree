@@ -105,6 +105,14 @@ class PMA {
   inline uint64_t last_non_empty_segment() const {
     return last_non_empty_segment_; }
 
+  // this function shall be deleted in the future. 
+  // it is only used by vebtree to update the first segment count to 2.
+  // the item count should have been encoded in the segment and decoded when used.
+  inline void vebtree_init_first_segment_count() {
+    assert(item_count_[0] == 0);
+    item_count_[0] = 2;
+  }
+
  private:
 
   // helper function

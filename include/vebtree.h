@@ -53,6 +53,7 @@ class vEBTree {
       
       // set the first segment item count to 2;
       segment_element_count[0] = 2;
+      pma_.vebtree_init_first_segment_count();
     }
 
   /**
@@ -140,7 +141,8 @@ class vEBTree {
   std::vector<uint64_t> GetLeafAddresses(Node* node, uint64_t height);
 
   // when the node children exceeds threshold call this method.
-  bool NodeSplit(Node* node, uint64_t height);
+  // we need additionally pass in the node address, because if the recursive subtree height is 1, the new node shall be inserted immediately after this node
+  bool NodeSplit(Node* node, uint64_t height, uint64_t node_address);
 
   // root_address_ and root_height_ will be updated by this function
   // return false if no more space
