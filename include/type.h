@@ -8,6 +8,7 @@
 namespace cobtree {
 
 struct NodeEntry{
+  bool empty() const { return (key == UINT64_MAX) && (addr == UINT64_MAX); }
   uint64_t key = UINT64_MAX;
   uint64_t addr = UINT64_MAX; // children are stated as the unit idx of PMA.
 };

@@ -7,6 +7,7 @@ namespace cobtree {
 
 struct TreeCopy {
   uint64_t tree_root_height; // height of the root in the vEBtree before copy.
+  uint64_t tree_leaf_height;
   uint64_t node_count;
   uint64_t total_size;
   std::unique_ptr<char[]> tree;
@@ -108,8 +109,11 @@ class vEBTree {
   // return number of nodes of moved tree. facilitate calculation of the end address.
   uint64_t MoveSubtree(uint64_t subtree_root_address, uint64_t height, uint64_t new_address);
 
+  // The top part only allows us to differentiate between leaf tree and top part trees during a node split, because this function is used in MoveSubtree as well.
+  // for call within MoveSubtree. top_part_only is set to false
+  // for call inside NodeSplit, where we want to copy out the new nodes owned top part of recursive tree. top_part_only is set true.
   TreeCopy CopySubtree(uint64_t subtree_root_addresss, 
-    uint64_t height);
+    uint64_t height, bool top_part_only);
 
   void InsertSubtree(const TreeCopy& tree_store, uint64_t new_address);
   

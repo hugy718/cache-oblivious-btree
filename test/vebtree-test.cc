@@ -26,7 +26,7 @@ int main() {
     uid, pma_density, &cache};
 
     std::cout << "--------------insertion-----------------\n";
-  for (uint64_t i = 1; i < 10; i++) {
+  for (uint64_t i = 1; i < 20; i++) {
     std::cout << "insert: " << i << " \n";
     auto success = tree.Insert(i, i);
 
@@ -41,7 +41,7 @@ int main() {
   }
 
   std::cout << "--------------Get-----------------\n";
-  for (uint64_t i = 1; i < 10; i++) {
+  for (uint64_t i = 1; i < 20; i++) {
     std::cout << "get: " << i << " \n";
     uint64_t pma_address;
     auto value = tree.Get(i, &pma_address);
